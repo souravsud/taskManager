@@ -37,40 +37,39 @@ class OpenFOAMCaseGenerator:
         case_info = []
 
         for root, dirs, files in os.walk(self.input_root):
-            if 'pipeline_metadata.json' in files:
-                metadata_path = Path(root) / 'pipeline_metadata.json'
-                with open(metadata_path) as f:
-                    metadata = json.load(f)
+            if 'pipeline_metadata.json' not in files:
+                continue
 
-                path_parts = root.split(os.sep)
+            metadata_path = Path(root) / 'pipeline_metadata.json'
+            with open(metadata_path) as f:
+                metadata = json.load(f)
 
-                if len(path_parts) >= 2:
-                    rotation_folder = path_parts[-1]
-                    terrain_folder = path_parts[-2]
+            case_path = Path(root)
+            rotation_folder = case_path.name
+            terrain_folder = case_path.parent.name
 
-                    terrain_index = None
-                    location = None
+            terrain_index = None
+            location = None
+            if terrain_folder.startswith('terrain_'):
+                parts = terrain_folder.split('_')
+                if len(parts) >= 2:
+                    terrain_index = parts[1]
+                    if len(parts) >= 6:
+                        location = f"{parts[2]}.{parts[3]} {parts[4]}.{parts[5]}"
 
-                    if terrain_folder.startswith('terrain_'):
-                        parts = terrain_folder.split('_')
-                        if len(parts) >= 2:
-                            terrain_index = parts[1]
-                            if len(parts) >= 6:
-                                location = f"{parts[2]}.{parts[3]} {parts[4]}.{parts[5]}"
+            rotation_degree = None
+            if rotation_folder.startswith('rotatedTerrain_') and rotation_folder.endswith('_deg'):
+                degree_part = rotation_folder[len('rotatedTerrain_'):-len('_deg')]
+                if degree_part.isdigit():
+                    rotation_degree = int(degree_part)
 
-                    rotation_degree = None
-                    if rotation_folder.startswith('rotatedTerrain_') and rotation_folder.endswith('_deg'):
-                        degree_part = rotation_folder[len('rotatedTerrain_'):-len('_deg')]
-                        if degree_part.isdigit():
-                            rotation_degree = int(degree_part)
-
-                    case_info.append({
-                        'case_dir': root,
-                        'terrain_index': terrain_index,
-                        'location': location,
-                        'rotation_degree': rotation_degree,
-                        'metadata': metadata
-                    })
+            case_info.append({
+                'case_dir': root,
+                'terrain_index': terrain_index,
+                'location': location,
+                'rotation_degree': rotation_degree,
+                'metadata': metadata
+            })
 
         return case_info
 
@@ -78,12 +77,17 @@ class OpenFOAMCaseGenerator:
     # FILE RENDERING
     # --------------------------------------------------
 
-    def render_file(self, file_path, context):
-        with open(file_path, 'r') as f:
+    def render_j2_file(self, j2_path, context):
+        """Render a Jinja2 .j2 template file, write output without the .j2 suffix, then delete the template."""
+        j2_path = Path(j2_path)
+        if j2_path.suffix != '.j2':
+            raise ValueError(f"Expected a .j2 file, got: {j2_path}")
+        output_path = j2_path.with_suffix('')
+        with open(j2_path) as f:
             template = Template(f.read())
-        rendered = template.render(context)
-        with open(file_path, 'w') as f:
-            f.write(rendered)
+        with open(output_path, 'w') as f:
+            f.write(template.render(context))
+        j2_path.unlink()
 
     # --------------------------------------------------
     # CASE SETUP
@@ -109,13 +113,14 @@ class OpenFOAMCaseGenerator:
 
         # Render OpenFOAM dictionary files
         files_to_render = [
-            output_case / 'system' / 'controlDict',
-            output_case / 'system' / 'decomposeDict',
+            output_case / 'system' / 'controlDict.j2',
+            output_case / 'system' / 'decomposeParDict.j2',
+            output_case / 'system' / 'fvSolution.j2',
         ]
 
         for file in files_to_render:
             if file.exists():
-                self.render_file(file, context)
+                self.render_j2_file(file, context)
 
         # Render openfoam.sh from template
         self.render_hpc_script(output_case, case_name)
@@ -262,26 +267,11 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def render_hpc_script(self, case_path, case_name):
-
-        template_file = case_path / "openfoam.sh.j2"
-        output_file = case_path / "openfoam.sh"
-
-        context = {
-            "job_name": f"of_{case_name}",
-            **self.hpc_defaults
-        }
-
-        if template_file.exists():
-            with open(template_file) as f:
-                template = Template(f.read())
-
-            rendered = template.render(context)
-
-            with open(output_file, 'w') as f:
-                f.write(rendered)
-
-            os.remove(template_file)
-            os.chmod(output_file, 0o755)
+        j2_file = case_path / "openfoam.sh.j2"
+        if j2_file.exists():
+            context = {"job_name": f"of_{case_name}", **self.hpc_defaults}
+            self.render_j2_file(j2_file, context)
+            os.chmod(case_path / "openfoam.sh", 0o755)
 
     # --------------------------------------------------
     # DEUCALION COPY
@@ -415,7 +405,7 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def list_cases_by_status(self, mesh_status=None, submitted=None):
-        """List cases filtered by status"""
+        """List cases filtered by status. mesh_status can be a string or list of strings."""
         cases = []
 
         for case_dir in sorted(self.output_dir.iterdir()):
@@ -427,8 +417,10 @@ class OpenFOAMCaseGenerator:
                 continue
 
             # Apply filters
-            if mesh_status and status.get("mesh_status") != mesh_status:
-                continue
+            if mesh_status is not None:
+                allowed = mesh_status if isinstance(mesh_status, list) else [mesh_status]
+                if status.get("mesh_status") not in allowed:
+                    continue
             if submitted is not None and status.get("submitted") != submitted:
                 continue
 
@@ -442,14 +434,22 @@ class OpenFOAMCaseGenerator:
 
     def list_failed_cases(self):
         """List cases with failed meshing"""
-        failed = []
-        for case_dir in sorted(self.output_dir.iterdir()):
-            if not case_dir.is_dir():
-                continue
-            status = self.get_status(case_dir)
-            if status and status.get("mesh_status") in ["FAILED", "ERROR"]:
-                failed.append(case_dir)
-        return failed
+        return self.list_cases_by_status(mesh_status=["FAILED", "ERROR"])
+
+    # --------------------------------------------------
+    # COPY + SUBMIT HELPER
+    # --------------------------------------------------
+
+    def copy_and_submit(self, case):
+        """Copy a ready case to HPC and submit it (retries if already copied but not submitted)."""
+        status = self.get_status(case)
+        if not status:
+            return
+        if not status.get("copied_to_hpc"):
+            if self.copy_to_deucalion(case):
+                self.submit_case(case)
+        elif not status.get("submitted"):
+            self.submit_case(case)
 
     # --------------------------------------------------
     # BULK GENERATION

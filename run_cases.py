@@ -25,15 +25,8 @@ if __name__ == "__main__":
 
     ready_cases = generator.list_ready_cases()
     for case in ready_cases:
-        status = generator.get_status(case)
-        
-        if not status.get("copied_to_hpc"):
-            print(f"Retrying copy: {case.name}")
-            if generator.copy_to_deucalion(case):
-                generator.submit_case(case)
-        elif not status.get("submitted"):
-            print(f"Retrying submission: {case.name}")
-            generator.submit_case(case)
+        print(f"Retrying copy/submission: {case.name}")
+        generator.copy_and_submit(case)
 
     # Find cases that need meshing
     all_cases = sorted(generator.output_dir.iterdir())
@@ -64,17 +57,8 @@ if __name__ == "__main__":
             print("="*60 + "\n")
             
             ready_cases = generator.list_ready_cases()
-            
             for case in ready_cases:
-                # Check if already copied
-                status = generator.get_status(case)
-                if not status.get("copied_to_hpc"):
-                    if generator.copy_to_deucalion(case):
-                        # Submit after successful copy
-                        generator.submit_case(case)
-                elif not status.get("submitted"):
-                    # Already copied but not submitted
-                    generator.submit_case(case)
+                generator.copy_and_submit(case)
 
     # Report status
     print("\n" + "="*60)
