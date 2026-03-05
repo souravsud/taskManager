@@ -148,6 +148,7 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def initialize_case_status(self, case_path):
+        case_path = Path(case_path)
         status_file = case_path / "case_status.json"
 
         if not status_file.exists():
@@ -158,12 +159,15 @@ class OpenFOAMCaseGenerator:
                 "submitted": False,
                 "job_id": None,
                 "job_status": None,
-                "last_checked": None
+                "last_checked": None,
+                "results_fetched": False,
+                "last_fetched_timestep": None
             }
             with open(status_file, 'w') as f:
                 json.dump(status, f, indent=2)
 
     def update_status(self, case_path, updates):
+        case_path = Path(case_path)
         status_file = case_path / "case_status.json"
         with open(status_file) as f:
             status = json.load(f)
@@ -174,6 +178,7 @@ class OpenFOAMCaseGenerator:
             json.dump(status, f, indent=2)
 
     def get_status(self, case_path):
+        case_path = Path(case_path)
         status_file = case_path / "case_status.json"
         if not status_file.exists():
             return None
@@ -267,6 +272,7 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def render_hpc_script(self, case_path, case_name):
+        case_path = Path(case_path)
         j2_file = case_path / "openfoam.sh.j2"
         if j2_file.exists():
             context = {"job_name": f"of_{case_name}", **self.hpc_defaults}
@@ -361,24 +367,42 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def check_job_status(self, job_id):
-        """Check job status using squeue/sacct"""
+        """Check job status using squeue/sacct with improved error handling"""
+        if not job_id:
+            return "NO_JOB_ID"
+        
         try:
             # Try squeue first (for running/pending jobs)
-            cmd = ["ssh", self.deucalion_host, f"squeue -j {job_id} --noheader --format=%T"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            cmd = f"squeue -j {job_id} --noheader --format=%T"
+            result = subprocess.run(
+                ["ssh", self.deucalion_host, cmd],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
             
             if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()  # PENDING, RUNNING, etc.
+                status = result.stdout.strip().upper()
+                return status  # PENDING, RUNNING, etc.
             
             # If not in squeue, check sacct (for completed jobs)
-            cmd = ["ssh", self.deucalion_host, f"sacct -j {job_id} --noheader --format=State -P | head -1"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            cmd = f"sacct -j {job_id} --noheader --format=State -P 2>/dev/null | head -1"
+            result = subprocess.run(
+                ["ssh", self.deucalion_host, cmd],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
             
             if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()  # COMPLETED, FAILED, etc.
+                status = result.stdout.strip().upper()
+                return status  # COMPLETED, FAILED, TIMEOUT, etc.
             
+            # If we can't find it in either queue, assume UNKNOWN
             return "UNKNOWN"
 
+        except subprocess.TimeoutExpired:
+            return "TIMEOUT"
         except Exception as e:
             print(f"[STATUS CHECK ERROR] Job {job_id}: {e}")
             return "ERROR"
@@ -450,6 +474,180 @@ class OpenFOAMCaseGenerator:
                 self.submit_case(case)
         elif not status.get("submitted"):
             self.submit_case(case)
+
+    # --------------------------------------------------
+    # CONTROLDICT PARSING & TIME STEP DETECTION
+    # --------------------------------------------------
+
+    def get_last_timestep(self, case_path):
+        """Parse controlDict to get endTime (the last saved timestep)"""
+        case_path = Path(case_path)
+        control_dict = case_path / "system" / "controlDict"
+        
+        if not control_dict.exists():
+            return None
+        
+        try:
+            with open(control_dict) as f:
+                content = f.read()
+            
+            # Look for "endTime" entry (simple parsing)
+            import re
+            match = re.search(r'endTime\s+(\d+);', content)
+            if match:
+                return int(match.group(1))
+            return None
+        except Exception as e:
+            print(f"Error parsing controlDict: {e}")
+            return None
+
+    def get_result_timesteps(self, case_path_remote):
+        """Query remote OpenFOAM case directory to find available timestep directories"""
+        try:
+            # List all numeric directories in the remote case
+            cmd = f"ls -1 {case_path_remote} | grep -E '^[0-9]+$' | sort -n"
+            result = subprocess.run(
+                ["ssh", self.deucalion_host, cmd],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                timesteps = [int(ts) for ts in result.stdout.strip().split('\n') if ts]
+                return sorted(timesteps)
+            return []
+        except Exception as e:
+            print(f"Error querying timesteps: {e}")
+            return []
+
+    # --------------------------------------------------
+    # RESULT FETCHING FROM HPC
+    # --------------------------------------------------
+
+    def fetch_case_results(self, case_local, case_remote=None, fetch_last_timestep=True, 
+                          fetch_postprocessing=True, fetch_logs=True):
+        """
+        Fetch selected results from HPC back to local machine.
+        
+        Args:
+            case_local: Path to local case directory
+            case_remote: Path to remote case on HPC (if None, constructed from case name)
+            fetch_last_timestep: Fetch only the last saved timestep directory
+            fetch_postprocessing: Fetch postProcessing/ folder
+            fetch_logs: Fetch log files (but not blockMesh/checkMesh)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        case_local = Path(case_local)
+        case_name = case_local.name
+        
+        if case_remote is None:
+            case_remote = f"{self.deucalion_path}/{case_name}"
+        
+        print(f"[FETCH START] {case_name} from {self.deucalion_host}")
+        
+        try:
+            # 1. Fetch postProcessing folder if requested
+            if fetch_postprocessing:
+                print(f"  → Fetching postProcessing/…")
+                cmd = [
+                    "rsync",
+                    "-avz",
+                    f"{self.deucalion_host}:{case_remote}/postProcessing/",
+                    str(case_local) + "/postProcessing/"
+                ]
+                try:
+                    subprocess.run(cmd, check=False, capture_output=True, timeout=120)
+                    print(f"    ✓ postProcessing synced")
+                except Exception as e:
+                    print(f"    ⚠ postProcessing sync failed: {e}")
+            
+            # 2. Fetch log files (excluding blockMesh/checkMesh)
+            if fetch_logs:
+                print(f"  → Fetching log files…")
+                excluded_logs = ["log.blockMesh", "log.checkMesh"]
+                
+                # Get list of logs on remote
+                cmd_str = "ls -1 {} | grep '^log\\.' | grep -v -E '(blockMesh|checkMesh)'".format(case_remote)
+                result = subprocess.run(
+                    ["ssh", self.deucalion_host, cmd_str],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    log_files = result.stdout.strip().split('\n')
+                    for log_file in log_files:
+                        try:
+                            remote_file = f"{self.deucalion_host}:{case_remote}/{log_file}"
+                            local_file = case_local / log_file
+                            subprocess.run(
+                                ["rsync", "-avz", remote_file, str(local_file)],
+                                check=False,
+                                capture_output=True,
+                                timeout=60
+                            )
+                        except Exception as e:
+                            print(f"    ⚠ Failed to fetch {log_file}: {e}")
+                    print(f"    ✓ {len(log_files)} log file(s) synced")
+                else:
+                    print(f"    ⚠ No log files found or error querying")
+            
+            # 3. Fetch last timestep directory if requested
+            if fetch_last_timestep:
+                print(f"  → Fetching last timestep…")
+                timesteps = self.get_result_timesteps(case_remote)
+                
+                if timesteps:
+                    last_ts = timesteps[-1]
+                    print(f"    Last timestep found: {last_ts}")
+                    
+                    try:
+                        cmd = [
+                            "rsync",
+                            "-avz",
+                            f"{self.deucalion_host}:{case_remote}/{last_ts}/",
+                            str(case_local / str(last_ts)) + "/"
+                        ]
+                        subprocess.run(cmd, check=True, capture_output=False, timeout=300)
+                        print(f"    ✓ Timestep {last_ts} synced")
+                        
+                        # Update status to track that results were fetched
+                        self.update_status(case_local, {"results_fetched": True, "last_fetched_timestep": last_ts})
+                    except Exception as e:
+                        print(f"    ✗ Failed to fetch timestep {last_ts}: {e}")
+                        return False
+                else:
+                    print(f"    ⚠ No timestep directories found on remote")
+            
+            print(f"[FETCH OK] {case_name}")
+            return True
+
+        except Exception as e:
+            print(f"[FETCH FAILED] {case_name}: {e}")
+            return False
+
+    def fetch_multiple_results(self, case_paths, n_workers=2, **fetch_kwargs):
+        """Fetch results from multiple cases in sequence (slower but more reliable)"""
+        print(f"\nFetching results from {len(case_paths)} case(s)…\n")
+        
+        results = []
+        for i, case_path in enumerate(case_paths, 1):
+            print(f"[{i}/{len(case_paths)}] Processing {Path(case_path).name}")
+            success = self.fetch_case_results(case_path, **fetch_kwargs)
+            results.append(success)
+            print()
+        
+        succeeded = sum(results)
+        failed = len(results) - succeeded
+        print(f"{'='*60}")
+        print(f"Result fetching complete: {succeeded} succeeded, {failed} failed")
+        print(f"{'='*60}\n")
+        
+        return results
 
     # --------------------------------------------------
     # BULK GENERATION
