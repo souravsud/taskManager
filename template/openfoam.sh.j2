@@ -8,7 +8,7 @@
 
 
 module purge
-module load OpenFOAM/v2506-foss-2025a
+module load OpenFOAM/{{ openfoam_version }}
 
 cd $SLURM_SUBMIT_DIR
 source $FOAM_BASH

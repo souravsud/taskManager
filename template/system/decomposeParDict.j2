@@ -2,7 +2,7 @@
   =========                 |
   \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
    \\    /   O peration     | Website:  https://openfoam.org
-    \\  /    A nd           | Version:  12
+    \\  /    A nd           | Version:  2506
      \\/     M anipulation  |
 \*---------------------------------------------------------------------------*/
 FoamFile
@@ -20,18 +20,4 @@ numberOfSubdomains {{n_procs}};
 //distributor     ptscotch;     // ptscotch is good for balancing
 method          scotch;
 
-/* simpleCoeffs
-{
-    n               (2 2 2);
-    delta           0.001;
-}
-
-hierarchicalCoeffs
-{
-    // Choose based on core count. For 16:
-    // (4 4 1) is a common choice for generally balanced decomposition.
-    // (2 2 4) might also be considered if you want to partition more heavily in Z.
-    n           (2 2 2); // <--- CHANGE THIS if using hierarchical
-    order       xyz;
-} */
 // ************************************************************************* //

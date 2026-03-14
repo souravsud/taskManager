@@ -18,7 +18,7 @@ class OpenFOAMCaseGenerator:
         
         # Deucalion remote path
         self.deucalion_host = "deucalion"
-        self.deucalion_path = deucalion_path or "/projects/EEHPC-BEN-2026B02-011/cfd_data"
+        self.deucalion_path = deucalion_path
 
         # Centralized HPC defaults
         self.hpc_defaults = {
@@ -26,7 +26,8 @@ class OpenFOAMCaseGenerator:
             "partition": "normal-x86",
             "nodes": 1,
             "ntasks": 128,
-            "walltime": "10:00:00"
+            "walltime": "10:00:00",
+            "openfoam_version": "v2506-foss-2025a"
         }
 
     # --------------------------------------------------
