@@ -12,7 +12,7 @@ from config_utils import load_runtime_config
 
 class OpenFOAMCaseGenerator:
 
-    def __init__(self, template_path, input_dir, output_dir, deucalion_path=None, config_path=None):
+    def __init__(self, template_path, input_dir, output_dir, cluster_path=None, config_path=None):
         self.template_path = Path(template_path)
         self.input_root = Path(input_dir)
         self.output_dir = Path(output_dir)
@@ -22,18 +22,18 @@ class OpenFOAMCaseGenerator:
 
         self.deucalion_host = self.config["deucalion"]["host"]
         configured_remote_path = self.config["deucalion"].get("remote_base_path")
-        self.deucalion_path = deucalion_path if deucalion_path is not None else configured_remote_path
+        self.cluster_path = cluster_path if cluster_path is not None else configured_remote_path
 
         self.hpc_defaults = self.config["hpc"]
         self.openfoam_defaults = self.config["openfoam"]
         self.parallel_defaults = self.config["parallel"]
         self.timeouts = self.config["timeouts"]
 
-    def _require_deucalion_path(self):
-        if not self.deucalion_path:
+    def _require_cluster_path(self):
+        if not self.cluster_path:
             raise ValueError(
                 "deucalion path is not configured. Set deucalion.remote_base_path in YAML "
-                "or pass deucalion_path to OpenFOAMCaseGenerator."
+                "or pass cluster_path to OpenFOAMCaseGenerator."
             )
 
     # --------------------------------------------------
@@ -297,7 +297,7 @@ class OpenFOAMCaseGenerator:
         """Copy meshed case to deucalion using rsync with compression"""
         case_path = Path(case_path)
         case_name = case_path.name
-        self._require_deucalion_path()
+        self._require_cluster_path()
         
         print(f"[COPY START] {case_name} -> {self.deucalion_host}")
 
@@ -308,7 +308,7 @@ class OpenFOAMCaseGenerator:
                 "-avz",  # archive, verbose, compress
                 "--progress",
                 f"{case_path}/",
-                f"{self.deucalion_host}:{self.deucalion_path}/{case_name}/"
+                f"{self.deucalion_host}:{self.cluster_path}/{case_name}/"
             ]
 
             result = subprocess.run(
@@ -334,7 +334,7 @@ class OpenFOAMCaseGenerator:
         """Submit case to HPC via SSH sbatch"""
         case_path = Path(case_path)
         case_name = case_path.name
-        self._require_deucalion_path()
+        self._require_cluster_path()
         
         print(f"[SUBMIT START] {case_name}")
 
@@ -343,7 +343,7 @@ class OpenFOAMCaseGenerator:
             cmd = [
                 "ssh",
                 self.deucalion_host,
-                f"cd {self.deucalion_path}/{case_name} && sbatch openfoam.sh"
+                f"cd {self.cluster_path}/{case_name} && sbatch openfoam.sh"
             ]
 
             result = subprocess.run(
@@ -554,10 +554,10 @@ class OpenFOAMCaseGenerator:
         """
         case_local = Path(case_local)
         case_name = case_local.name
-        self._require_deucalion_path()
+        self._require_cluster_path()
         
         if case_remote is None:
-            case_remote = f"{self.deucalion_path}/{case_name}"
+            case_remote = f"{self.cluster_path}/{case_name}"
         
         print(f"[FETCH START] {case_name} from {self.deucalion_host}")
         
