@@ -1,22 +1,38 @@
-from pathlib import Path
+import argparse
+
+from config_utils import load_runtime_config, required_path
 from taskManager import OpenFOAMCaseGenerator
 
-# ============================
-# USER SETTINGS
-# ============================
-N_CASES_TO_MESH = 4  # How many cases to mesh in this run
-N_PARALLEL_WORKERS = 4  # How many meshing operations simultaneously
-AUTO_SUBMIT = True  # Automatically copy and submit after meshing
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Mesh generated cases locally and optionally submit to HPC."
+    )
+    parser.add_argument(
+        "--config-path",
+        default="taskmanager_config.yaml",
+        help="Path to YAML config file (default: taskmanager_config.yaml).",
+    )
+    return parser
+
 
 # ============================
 # MAIN
 # ============================
 if __name__ == "__main__":
+    args = build_parser().parse_args()
+    config, _ = load_runtime_config(args.config_path)
+
+    run_settings = config.get("run_cases", {})
+    n_cases_to_mesh = run_settings.get("n_cases_to_mesh", 4)
+    n_parallel_workers = run_settings.get("n_parallel_workers", 4)
+    auto_submit = run_settings.get("auto_submit", True)
+
     generator = OpenFOAMCaseGenerator(
-        template_path="/home/sourav/CFD_Dataset/openfoam_caseGenerator/template",
-        input_dir="/home/sourav/CFD_Dataset/generateInputs/Data_test/downloads",
-        output_dir="/home/sourav/CFD_Dataset/openFoamCases",
-        deucalion_path="/projects/EEHPC-BEN-2026B02-011/cfd_data"
+        template_path=required_path(config, "template_path"),
+        input_dir=required_path(config, "input_dir"),
+        output_dir=required_path(config, "output_dir"),
+        config_path=args.config_path,
     )
     
     print("\n" + "="*60)
@@ -39,19 +55,19 @@ if __name__ == "__main__":
         status = generator.get_status(case)
         if status and status["mesh_status"] == "NOT_RUN":
             cases_to_mesh.append(case)
-            if len(cases_to_mesh) >= N_CASES_TO_MESH:
+            if len(cases_to_mesh) >= n_cases_to_mesh:
                 break
 
     if not cases_to_mesh:
         print("No cases need meshing.")
     else:
-        print(f"Meshing {len(cases_to_mesh)} cases with {N_PARALLEL_WORKERS} workers...")
+        print(f"Meshing {len(cases_to_mesh)} cases with {n_parallel_workers} workers...")
         
         # Parallel meshing
-        generator.mesh_cases_parallel(cases_to_mesh, n_workers=N_PARALLEL_WORKERS)
+        generator.mesh_cases_parallel(cases_to_mesh, n_workers=n_parallel_workers)
 
         # Auto-submit if enabled
-        if AUTO_SUBMIT:
+        if auto_submit:
             print("\n" + "="*60)
             print("Auto-submission enabled")
             print("="*60 + "\n")

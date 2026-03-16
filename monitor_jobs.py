@@ -1,23 +1,39 @@
-from pathlib import Path
+import argparse
+
+from config_utils import load_runtime_config, required_path
 from taskManager import OpenFOAMCaseGenerator
 import time
 import sys
 
-# ============================
-# USER SETTINGS
-# ============================
-CHECK_INTERVAL_MINUTES = 120  # Check every 2 hours
-MAX_ITERATIONS = None  # None = run forever, or set number (e.g., 10)
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Monitor submitted HPC jobs and update local status files."
+    )
+    parser.add_argument(
+        "--config-path",
+        default="taskmanager_config.yaml",
+        help="Path to YAML config file (default: taskmanager_config.yaml).",
+    )
+    return parser
+
 
 # ============================
 # MAIN
 # ============================
 if __name__ == "__main__":
+    args = build_parser().parse_args()
+    config, _ = load_runtime_config(args.config_path)
+
+    monitor_settings = config.get("monitor_jobs", {})
+    check_interval_minutes = monitor_settings.get("check_interval_minutes", 120)
+    max_iterations = monitor_settings.get("max_iterations", None)
+
     generator = OpenFOAMCaseGenerator(
-        template_path="/home/sourav/CFD_Dataset/openfoam_caseGenerator/template",
-        input_dir="/home/sourav/CFD_Dataset/generateInputs/Data_test/downloads",
-        output_dir="/home/sourav/CFD_Dataset/openFoamCases",
-        deucalion_path="/projects/EEHPC-BEN-2026B02-011/cfd_data"
+        template_path=required_path(config, "template_path"),
+        input_dir=required_path(config, "input_dir"),
+        output_dir=required_path(config, "output_dir"),
+        config_path=args.config_path,
     )
 
     iteration = 0
@@ -67,13 +83,13 @@ if __name__ == "__main__":
                         print(f"  - {case_name}: Job {job_id} [{status}]")
 
             # Exit if max iterations reached
-            if MAX_ITERATIONS and iteration >= MAX_ITERATIONS:
-                print(f"\nReached max iterations ({MAX_ITERATIONS}). Exiting.")
+            if max_iterations and iteration >= max_iterations:
+                print(f"\nReached max iterations ({max_iterations}). Exiting.")
                 break
 
             # Sleep until next check
-            print(f"\nNext check in {CHECK_INTERVAL_MINUTES} minutes...")
-            time.sleep(CHECK_INTERVAL_MINUTES * 60)
+            print(f"\nNext check in {check_interval_minutes} minutes...")
+            time.sleep(check_interval_minutes * 60)
 
     except KeyboardInterrupt:
         print("\n\nMonitoring stopped by user (Ctrl+C).")

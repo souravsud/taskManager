@@ -5,15 +5,31 @@ This system meshes OpenFOAM cases locally in parallel, copies them to deucalion 
 
 ## Files
 - `taskManager.py` - Core class with all functionality
-- `run_cases.py` - Main script to mesh + submit cases
+- `taskmanager_config.yaml` - Central settings file (edit this)
+- `generate_cases.py` - Case generation entrypoint
+- `run_cases.py` - Mesh + submit entrypoint
 - `monitor_jobs.py` - Background job status monitor
 
 ## Workflow
+
+### 0. Configure Once
+Edit `taskmanager_config.yaml` and set these fields before running scripts:
+- `paths.template_path`
+- `paths.input_dir`
+- `paths.output_dir`
+- `deucalion.remote_base_path`
+- Optional tuning in `hpc`, `parallel`, `timeouts`, `run_cases`, `monitor_jobs`
 
 ### 1. Generate Cases
 ```bash
 # One-time setup: generate case folders from templates
 python3 generate_cases.py
+```
+
+Optional:
+```bash
+python3 generate_cases.py \
+  --config-path ./taskmanager_config.yaml
 ```
 
 ### 2. Mesh + Submit Cases
@@ -22,10 +38,15 @@ python3 generate_cases.py
 python3 run_cases.py
 ```
 
-**Settings in run_cases.py:**
-- `N_CASES_TO_MESH = 4` - How many cases to process
-- `N_PARALLEL_WORKERS = 4` - Simultaneous meshing operations (adjust for your CPU)
-- `AUTO_SUBMIT = True` - Auto-copy and submit after meshing
+Optional:
+```bash
+python3 run_cases.py --config-path ./taskmanager_config.yaml
+```
+
+**Settings in `taskmanager_config.yaml` (section `run_cases`):**
+- `n_cases_to_mesh` - How many cases to process
+- `n_parallel_workers` - Simultaneous meshing operations
+- `auto_submit` - Auto-copy and submit after meshing
 
 **Output:**
 ```
@@ -49,9 +70,14 @@ nohup python3 monitor_jobs.py > monitor.log 2>&1 &
 python3 monitor_jobs.py
 ```
 
-**Settings in monitor_jobs.py:**
-- `CHECK_INTERVAL_MINUTES = 120` - Poll every 2 hours
-- `MAX_ITERATIONS = None` - Run forever (or set number)
+Optional:
+```bash
+python3 monitor_jobs.py --config-path ./taskmanager_config.yaml
+```
+
+**Settings in `taskmanager_config.yaml` (section `monitor_jobs`):**
+- `check_interval_minutes` - Poll interval
+- `max_iterations` - `null` means run forever
 
 **Stop monitoring:**
 ```bash
@@ -129,10 +155,10 @@ grep -l '"submitted": true' /home/sourav/CFD_Dataset/openFoamCases/*/case_status
 from taskManager import OpenFOAMCaseGenerator
 
 generator = OpenFOAMCaseGenerator(
-    template_path="/home/sourav/CFD_Dataset/openfoam_caseGenerator/template",
-    input_dir="/home/sourav/CFD_Dataset/generateInputs/Data_test/downloads",
-    output_dir="/home/sourav/CFD_Dataset/openFoamCases",
-    deucalion_path="/projects/EEHPC-BEN-2026B02-011/cfd_data"
+  template_path="./template",
+  input_dir="/path/to/downloads",
+  output_dir="/path/to/openFoamCases",
+  config_path="taskmanager_config.yaml"
 )
 
 # List ready cases

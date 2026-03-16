@@ -7,28 +7,34 @@ import subprocess
 from multiprocessing import Pool
 from datetime import datetime
 
+from config_utils import load_runtime_config
+
 
 class OpenFOAMCaseGenerator:
 
-    def __init__(self, template_path, input_dir, output_dir, deucalion_path=None):
+    def __init__(self, template_path, input_dir, output_dir, deucalion_path=None, config_path=None):
         self.template_path = Path(template_path)
         self.input_root = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Deucalion remote path
-        self.deucalion_host = "deucalion"
-        self.deucalion_path = deucalion_path
 
-        # Centralized HPC defaults
-        self.hpc_defaults = {
-            "account": "eehpc-ben-2026b02-011x",
-            "partition": "normal-x86",
-            "nodes": 1,
-            "ntasks": 128,
-            "walltime": "10:00:00",
-            "openfoam_version": "v2506-foss-2025a"
-        }
+        self.config, self.config_path = load_runtime_config(config_path)
+
+        self.deucalion_host = self.config["deucalion"]["host"]
+        configured_remote_path = self.config["deucalion"].get("remote_base_path")
+        self.deucalion_path = deucalion_path if deucalion_path is not None else configured_remote_path
+
+        self.hpc_defaults = self.config["hpc"]
+        self.openfoam_defaults = self.config["openfoam"]
+        self.parallel_defaults = self.config["parallel"]
+        self.timeouts = self.config["timeouts"]
+
+    def _require_deucalion_path(self):
+        if not self.deucalion_path:
+            raise ValueError(
+                "deucalion path is not configured. Set deucalion.remote_base_path in YAML "
+                "or pass deucalion_path to OpenFOAMCaseGenerator."
+            )
 
     # --------------------------------------------------
     # CASE DISCOVERY
@@ -102,8 +108,8 @@ class OpenFOAMCaseGenerator:
             'terrain_index': case_info['terrain_index'],
             'rotation_degree': case_info['rotation_degree'],
             'location': case_info['location'],
-            'end_time': 20000,
-            'write_interval': 5000,
+            'end_time': self.openfoam_defaults["end_time"],
+            'write_interval': self.openfoam_defaults["write_interval"],
             'n_procs': self.hpc_defaults["ntasks"],
             'wind_direction': case_info['metadata'].get('wind_direction_deg', 0),
             **case_info['metadata']
@@ -197,7 +203,7 @@ class OpenFOAMCaseGenerator:
 
         try:
             env = os.environ.copy()
-            env["RUN_STAGE"] = "mesh"
+            env["RUN_STAGE"] = self.openfoam_defaults["run_stage_mesh"]
 
             subprocess.run(
                 ["bash", "Allrun"],
@@ -249,8 +255,11 @@ class OpenFOAMCaseGenerator:
     # PARALLEL MESHING
     # --------------------------------------------------
 
-    def mesh_cases_parallel(self, cases, n_workers=4):
+    def mesh_cases_parallel(self, cases, n_workers=None):
         """Mesh multiple cases in parallel"""
+        if n_workers is None:
+            n_workers = self.parallel_defaults["mesh_workers"]
+
         print(f"\n{'='*60}")
         print(f"Starting parallel meshing: {len(cases)} cases, {n_workers} workers")
         print(f"{'='*60}\n")
@@ -288,8 +297,9 @@ class OpenFOAMCaseGenerator:
         """Copy meshed case to deucalion using rsync with compression"""
         case_path = Path(case_path)
         case_name = case_path.name
+        self._require_deucalion_path()
         
-        print(f"[COPY START] {case_name} -> deucalion")
+        print(f"[COPY START] {case_name} -> {self.deucalion_host}")
 
         try:
             # Rsync with compression, preserve permissions
@@ -324,6 +334,7 @@ class OpenFOAMCaseGenerator:
         """Submit case to HPC via SSH sbatch"""
         case_path = Path(case_path)
         case_name = case_path.name
+        self._require_deucalion_path()
         
         print(f"[SUBMIT START] {case_name}")
 
@@ -379,7 +390,7 @@ class OpenFOAMCaseGenerator:
                 ["ssh", self.deucalion_host, cmd],
                 capture_output=True,
                 text=True,
-                timeout=15
+                timeout=self.timeouts["job_status_ssh"]
             )
             
             if result.returncode == 0 and result.stdout.strip():
@@ -392,7 +403,7 @@ class OpenFOAMCaseGenerator:
                 ["ssh", self.deucalion_host, cmd],
                 capture_output=True,
                 text=True,
-                timeout=15
+                timeout=self.timeouts["job_status_ssh"]
             )
             
             if result.returncode == 0 and result.stdout.strip():
@@ -511,7 +522,7 @@ class OpenFOAMCaseGenerator:
                 ["ssh", self.deucalion_host, cmd],
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=self.timeouts["remote_list_timesteps"]
             )
             
             if result.returncode == 0:
@@ -543,6 +554,7 @@ class OpenFOAMCaseGenerator:
         """
         case_local = Path(case_local)
         case_name = case_local.name
+        self._require_deucalion_path()
         
         if case_remote is None:
             case_remote = f"{self.deucalion_path}/{case_name}"
@@ -560,7 +572,12 @@ class OpenFOAMCaseGenerator:
                     str(case_local) + "/postProcessing/"
                 ]
                 try:
-                    subprocess.run(cmd, check=False, capture_output=True, timeout=120)
+                    subprocess.run(
+                        cmd,
+                        check=False,
+                        capture_output=True,
+                        timeout=self.timeouts["fetch_postprocessing"],
+                    )
                     print(f"    ✓ postProcessing synced")
                 except Exception as e:
                     print(f"    ⚠ postProcessing sync failed: {e}")
@@ -576,7 +593,7 @@ class OpenFOAMCaseGenerator:
                     ["ssh", self.deucalion_host, cmd_str],
                     capture_output=True,
                     text=True,
-                    timeout=10
+                    timeout=self.timeouts["fetch_log_list"]
                 )
                 
                 if result.returncode == 0 and result.stdout.strip():
@@ -589,7 +606,7 @@ class OpenFOAMCaseGenerator:
                                 ["rsync", "-avz", remote_file, str(local_file)],
                                 check=False,
                                 capture_output=True,
-                                timeout=60
+                                timeout=self.timeouts["fetch_single_log"]
                             )
                         except Exception as e:
                             print(f"    ⚠ Failed to fetch {log_file}: {e}")
@@ -613,7 +630,12 @@ class OpenFOAMCaseGenerator:
                             f"{self.deucalion_host}:{case_remote}/{last_ts}/",
                             str(case_local / str(last_ts)) + "/"
                         ]
-                        subprocess.run(cmd, check=True, capture_output=False, timeout=300)
+                        subprocess.run(
+                            cmd,
+                            check=True,
+                            capture_output=False,
+                            timeout=self.timeouts["fetch_last_timestep"],
+                        )
                         print(f"    ✓ Timestep {last_ts} synced")
                         
                         # Update status to track that results were fetched
@@ -631,8 +653,11 @@ class OpenFOAMCaseGenerator:
             print(f"[FETCH FAILED] {case_name}: {e}")
             return False
 
-    def fetch_multiple_results(self, case_paths, n_workers=2, **fetch_kwargs):
+    def fetch_multiple_results(self, case_paths, n_workers=None, **fetch_kwargs):
         """Fetch results from multiple cases in sequence (slower but more reliable)"""
+        if n_workers is None:
+            n_workers = self.parallel_defaults["fetch_workers"]
+
         print(f"\nFetching results from {len(case_paths)} case(s)…\n")
         
         results = []
