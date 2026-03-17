@@ -3,12 +3,26 @@
 ## Overview
 This system meshes OpenFOAM cases locally in parallel, copies them to deucalion HPC, and auto-submits jobs.
 
+## Installation
+
+Install the package from the repository root:
+
+```bash
+pip install .
+```
+
+Or in editable/development mode:
+
+```bash
+pip install -e .
+```
+
 ## Files
-- `taskManager.py` - Core class with all functionality
+- `taskmanager/taskmanager.py` - Core class with all functionality
 - `taskmanager_config.yaml` - Central settings file (edit this)
-- `generate_cases.py` - Case generation entrypoint
-- `run_cases.py` - Mesh + submit entrypoint
-- `monitor_jobs.py` - Background job status monitor
+- `taskmanager/generate_cases.py` - Case generation entrypoint
+- `taskmanager/run_cases.py` - Mesh + submit entrypoint
+- `taskmanager/monitor_jobs.py` - Background job status monitor
 
 ## Workflow
 
@@ -23,24 +37,24 @@ Edit `taskmanager_config.yaml` and set these fields before running scripts:
 ### 1. Generate Cases
 ```bash
 # One-time setup: generate case folders from templates
-python3 generate_cases.py
+generate-cases
 ```
 
 Optional:
 ```bash
-python3 generate_cases.py \
+generate-cases \
   --config-path ./taskmanager_config.yaml
 ```
 
 ### 2. Mesh + Submit Cases
 ```bash
 # Mesh N cases in parallel and auto-submit to deucalion
-python3 run_cases.py
+run-cases
 ```
 
 Optional:
 ```bash
-python3 run_cases.py --config-path ./taskmanager_config.yaml
+run-cases --config-path ./taskmanager_config.yaml
 ```
 
 **Settings in `taskmanager_config.yaml` (section `run_cases`):**
@@ -64,15 +78,15 @@ Starting parallel meshing: 4 cases, 4 workers
 ### 3. Monitor Jobs (Optional)
 ```bash
 # Run in background to check job status every 2 hours
-nohup python3 monitor_jobs.py > monitor.log 2>&1 &
+nohup monitor-jobs > monitor.log 2>&1 &
 
 # Or run interactively
-python3 monitor_jobs.py
+monitor-jobs
 ```
 
 Optional:
 ```bash
-python3 monitor_jobs.py --config-path ./taskmanager_config.yaml
+monitor-jobs --config-path ./taskmanager_config.yaml
 ```
 
 **Settings in `taskmanager_config.yaml` (section `monitor_jobs`):**
@@ -82,7 +96,7 @@ python3 monitor_jobs.py --config-path ./taskmanager_config.yaml
 **Stop monitoring:**
 ```bash
 # If running in background
-pkill -f monitor_jobs.py
+pkill -f monitor-jobs
 
 # If interactive: Ctrl+C
 ```
@@ -152,7 +166,7 @@ grep -l '"submitted": true' /home/sourav/CFD_Dataset/openFoamCases/*/case_status
 
 **Manual operations:**
 ```python
-from taskManager import OpenFOAMCaseGenerator
+from taskmanager import OpenFOAMCaseGenerator
 
 generator = OpenFOAMCaseGenerator(
   template_path="./template",

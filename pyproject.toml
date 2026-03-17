@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taskmanager"
+version = "0.1.0"
+description = "OpenFOAM case generation, meshing, HPC submission, and job monitoring toolkit"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "jinja2",
+    "pyyaml",
+]
+
+[project.scripts]
+generate-cases = "taskmanager.generate_cases:main"
+run-cases = "taskmanager.run_cases:main"
+monitor-jobs = "taskmanager.monitor_jobs:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+taskmanager = ["taskmanager_config.yaml"]

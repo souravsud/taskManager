@@ -1,9 +1,9 @@
 import argparse
-
-from config_utils import load_runtime_config, required_path
-from taskManager import OpenFOAMCaseGenerator
-import time
 import sys
+import time
+
+from .config_utils import load_runtime_config, required_path
+from .taskmanager import OpenFOAMCaseGenerator
 
 
 def build_parser():
@@ -18,11 +18,8 @@ def build_parser():
     return parser
 
 
-# ============================
-# MAIN
-# ============================
-if __name__ == "__main__":
-    args = build_parser().parse_args()
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     config, _ = load_runtime_config(args.config_path)
 
     monitor_settings = config.get("monitor_jobs", {})
@@ -37,7 +34,7 @@ if __name__ == "__main__":
     )
 
     iteration = 0
-    
+
     try:
         while True:
             iteration += 1
@@ -58,10 +55,10 @@ if __name__ == "__main__":
                 for case in submitted_cases:
                     case_name = case.name
                     job_status = generator.update_job_status(case)
-                    
+
                     status_obj = generator.get_status(case)
                     job_id = status_obj.get("job_id", "N/A")
-                    
+
                     print(f"{case_name}: Job {job_id} -> {job_status}")
 
                     if job_status in ["PENDING", "RUNNING"]:
@@ -94,3 +91,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\nMonitoring stopped by user (Ctrl+C).")
         sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
