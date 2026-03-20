@@ -5,6 +5,10 @@
 #SBATCH --nodes={{ nodes }}
 #SBATCH --ntasks={{ ntasks }}
 #SBATCH --time={{ walltime }}
+{% if email_id %}
+#SBATCH --mail-type={{ email_type | default('END,FAIL') }}
+#SBATCH --mail-user={{ email_id }}
+{% endif %}
 
 
 module purge

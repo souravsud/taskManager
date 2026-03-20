@@ -2,8 +2,8 @@
 # Edit this file instead of changing hardcoded values in Python files.
 
 cluster:
-  host: your-cluster-hostname
-  remote_base_path: /path/to/remote/cfd_data
+  host: deucalion
+  remote_base_path: /projects/EEHPC-BEN-2026B02-011/cfd_data
 
 paths:
   template_path: ./template
@@ -18,7 +18,7 @@ input_format:
     - name: rotation_degree
       prefix: rotatedTerrain_
       suffix: _deg
-  case_name_template: "case_{case_num:03d}_{terrain_index}_{rotation_degree:03d}deg"
+  case_name_template: "rotatedTerrain_{rotation_degree:03d}_deg"
 
 openfoam:
   end_time: 20000
@@ -26,12 +26,14 @@ openfoam:
   run_stage_mesh: mesh
 
 hpc:
-  account: your-hpc-account
-  partition: your-partition
+  account: eehpc-ben-2026b02-011x
+  partition: normal-x86
   nodes: 1
   ntasks: 128
   walltime: "10:00:00"
-  openfoam_version: your-openfoam-module
+  openfoam_version: v2506-foss-2025a
+  email_id: souravssudhakaran@gmail.com
+  email_type: FAIL
 
 parallel:
   mesh_workers: 4

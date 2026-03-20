@@ -45,7 +45,7 @@ generator = OpenFOAMCaseGenerator(
     template_path="./template",
     input_dir="/path/to/downloads",
     output_dir="/path/to/openFoamCases",
-    config_path="taskmanager_config.yaml",  # optional
+    # config_path="/path/to/custom_config.yaml",  # optional override
 )
 
 # 1. Generate cases
@@ -91,7 +91,7 @@ hpc:
   walltime: "10:00:00"
 ```
 
-The config file in the current working directory is loaded automatically. Use `config_path=` to override.
+The packaged config is loaded by default. Use `config_path=` or `--config-path` to override with a custom YAML file.
 
 📘 Full configuration guide: [docs/configuration.md](docs/configuration.md)
 
