@@ -1,109 +1,79 @@
-# OpenFOAM Case Management - Usage Guide
+# taskManager
 
-## Overview
-This system meshes OpenFOAM cases locally in parallel, copies them to deucalion HPC, and auto-submits jobs.
+OpenFOAM case generation, meshing, HPC submission, and job monitoring toolkit.
 
 ## Installation
 
-Install the package from the repository root:
+```bash
+pip install git+https://github.com/souravsud/taskManager.git
+```
+
+Or clone and install locally:
 
 ```bash
 pip install .
 ```
 
-Or in editable/development mode:
+## Usage
 
-```bash
-pip install -e .
+All functionality is exposed through `OpenFOAMCaseGenerator`. Point it at your template, input metadata, and output directory, and it handles the rest.
+
+```python
+from taskmanager import OpenFOAMCaseGenerator
+
+generator = OpenFOAMCaseGenerator(
+    template_path="./template",
+    input_dir="/path/to/downloads",
+    output_dir="/path/to/openFoamCases",
+    config_path="taskmanager_config.yaml",  # optional, falls back to defaults
+)
+
+# 1. Generate case folders from template + metadata
+generator.generate_all_cases()
+
+# 2. Mesh cases in parallel (reads n_workers from config)
+cases_to_mesh = generator.list_cases_by_status(mesh_status="NOT_RUN")
+generator.mesh_cases_parallel(cases_to_mesh)
+
+# 3. Copy meshed cases to HPC and submit jobs
+for case in generator.list_ready_cases():
+    generator.copy_and_submit(case)
+
+# 4. Check job status
+for case in generator.list_cases_by_status(submitted=True):
+    status = generator.update_job_status(case)
+    print(case.name, status)
+
+# 5. Fetch results back from HPC
+for case in generator.list_cases_by_status(submitted=True):
+    generator.fetch_case_results(case)
 ```
 
-## Files
-- `taskmanager/taskmanager.py` - Core class with all functionality
-- `taskmanager_config.yaml` - Central settings file (edit this)
-- `taskmanager/generate_cases.py` - Case generation entrypoint
-- `taskmanager/run_cases.py` - Mesh + submit entrypoint
-- `taskmanager/monitor_jobs.py` - Background job status monitor
+## Configuration
 
-## Workflow
+Copy `taskmanager_config.yaml` to your project directory and edit the required fields:
 
-### 0. Configure Once
-Edit `taskmanager_config.yaml` and set these fields before running scripts:
-- `paths.template_path`
-- `paths.input_dir`
-- `paths.output_dir`
-- `deucalion.remote_base_path`
-- Optional tuning in `hpc`, `parallel`, `timeouts`, `run_cases`, `monitor_jobs`
+```yaml
+paths:
+  template_path: ./template
+  input_dir: /path/to/downloads
+  output_dir: /path/to/openFoamCases
 
-### 1. Generate Cases
-```bash
-# One-time setup: generate case folders from templates
-generate-cases
+deucalion:
+  remote_base_path: /projects/.../cfd_data
+
+hpc:
+  account: your-account
+  ntasks: 128
+  walltime: "10:00:00"
 ```
 
-Optional:
-```bash
-generate-cases \
-  --config-path ./taskmanager_config.yaml
-```
+The config file in the current working directory is loaded automatically; pass `config_path=` to override.
 
-### 2. Mesh + Submit Cases
-```bash
-# Mesh N cases in parallel and auto-submit to deucalion
-run-cases
-```
+## Status tracking
 
-Optional:
-```bash
-run-cases --config-path ./taskmanager_config.yaml
-```
+Each case folder contains `case_status.json`:
 
-**Settings in `taskmanager_config.yaml` (section `run_cases`):**
-- `n_cases_to_mesh` - How many cases to process
-- `n_parallel_workers` - Simultaneous meshing operations
-- `auto_submit` - Auto-copy and submit after meshing
-
-**Output:**
-```
-Starting parallel meshing: 4 cases, 4 workers
-[MESH START] case_0001_210deg
-[MESH START] case_0002_045deg
-...
-[MESH OK] case_0001_210deg
-[COPY START] case_0001_210deg -> deucalion
-[COPY OK] case_0001_210deg
-[SUBMIT START] case_0001_210deg
-[SUBMIT OK] case_0001_210deg -> Job ID: 123456
-```
-
-### 3. Monitor Jobs (Optional)
-```bash
-# Run in background to check job status every 2 hours
-nohup monitor-jobs > monitor.log 2>&1 &
-
-# Or run interactively
-monitor-jobs
-```
-
-Optional:
-```bash
-monitor-jobs --config-path ./taskmanager_config.yaml
-```
-
-**Settings in `taskmanager_config.yaml` (section `monitor_jobs`):**
-- `check_interval_minutes` - Poll interval
-- `max_iterations` - `null` means run forever
-
-**Stop monitoring:**
-```bash
-# If running in background
-pkill -f monitor-jobs
-
-# If interactive: Ctrl+C
-```
-
-## Status Tracking
-
-Each case has `case_status.json`:
 ```json
 {
   "mesh_status": "DONE",
@@ -111,81 +81,9 @@ Each case has `case_status.json`:
   "copied_to_hpc": true,
   "submitted": true,
   "job_id": "123456",
-  "job_status": "RUNNING",
-  "last_checked": "2026-02-11T14:30:00"
+  "job_status": "RUNNING"
 }
 ```
 
-**Status values:**
-- `mesh_status`: NOT_RUN, DONE, FAILED, ERROR
-- `job_status`: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED, TIMEOUT
-
-## Handling Failures
-
-### Failed Meshing
-```bash
-# Check which cases failed
-grep -l '"mesh_status": "FAILED"' /home/sourav/CFD_Dataset/openFoamCases/*/case_status.json
-
-# Inspect log
-cat /home/sourav/CFD_Dataset/openFoamCases/case_XXXX_YYYdeg/log.checkMesh
-```
-
-**To retry failed cases:**
-- Fix the issue (mesh parameters, geometry, etc.)
-- Manually set status back to NOT_RUN:
-```bash
-# Edit case_status.json, change "mesh_status": "NOT_RUN"
-```
-- Run `python3 run_cases.py` again
-
-### Failed Jobs on HPC
-Monitor script will flag these. Investigate on deucalion:
-```bash
-ssh deucalion
-cd /projects/EEHPC-BEN-2026B02-011/cfd_data/case_XXXX_YYYdeg
-cat log.simpleFoam
-sacct -j <job_id> --format=JobID,State,ExitCode,Elapsed
-```
-
-## Tips
-
-**Adjust parallel workers:**
-- Your PC has 12 cores
-- 4 workers = safe (leaves resources for OS)
-- Can increase to 6-8 if nothing else running
-
-**Check progress:**
-```bash
-# Count meshed cases
-grep -l '"mesh_ok": true' /home/sourav/CFD_Dataset/openFoamCases/*/case_status.json | wc -l
-
-# Count submitted jobs
-grep -l '"submitted": true' /home/sourav/CFD_Dataset/openFoamCases/*/case_status.json | wc -l
-```
-
-**Manual operations:**
-```python
-from taskmanager import OpenFOAMCaseGenerator
-
-generator = OpenFOAMCaseGenerator(
-  template_path="./template",
-  input_dir="/path/to/downloads",
-  output_dir="/path/to/openFoamCases",
-  config_path="taskmanager_config.yaml"
-)
-
-# List ready cases
-ready = generator.list_ready_cases()
-
-# List failed cases
-failed = generator.list_failed_cases()
-
-# Check specific job
-status = generator.check_job_status("123456")
-
-# Update all job statuses
-submitted = generator.list_cases_by_status(submitted=True)
-for case in submitted:
-    generator.update_job_status(case)
-```# taskManager
+`mesh_status` values: `NOT_RUN`, `DONE`, `FAILED`, `ERROR`  
+`job_status` values: `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`, `TIMEOUT`

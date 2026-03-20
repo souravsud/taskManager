@@ -16,8 +16,8 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+if __name__ == "__main__":
+    args = build_parser().parse_args()
     config, _ = load_runtime_config(args.config_path)
 
     run_settings = config.get("run_cases", {})
@@ -98,7 +98,3 @@ def main(argv=None):
             print(f"  - {case.name}: Job {job_id} [{job_status}]")
 
     print("="*60)
-
-
-if __name__ == "__main__":
-    main()

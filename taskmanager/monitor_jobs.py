@@ -18,8 +18,8 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+if __name__ == "__main__":
+    args = build_parser().parse_args()
     config, _ = load_runtime_config(args.config_path)
 
     monitor_settings = config.get("monitor_jobs", {})
@@ -91,7 +91,3 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("\n\nMonitoring stopped by user (Ctrl+C).")
         sys.exit(0)
-
-
-if __name__ == "__main__":
-    main()

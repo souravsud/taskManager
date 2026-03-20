@@ -13,11 +13,6 @@ dependencies = [
     "pyyaml",
 ]
 
-[project.scripts]
-generate-cases = "taskmanager.generate_cases:main"
-run-cases = "taskmanager.run_cases:main"
-monitor-jobs = "taskmanager.monitor_jobs:main"
-
 [tool.setuptools.packages.find]
 where = ["."]
 
