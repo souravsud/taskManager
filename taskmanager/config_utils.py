@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
             {"name": "terrain_index", "prefix": "terrain_"},
             {"name": "rotation_degree", "prefix": "rotatedTerrain_", "suffix": "_deg"},
         ],
-        "case_name_template": "case_{terrain_index}_{rotation_degree:03d}deg",
+        "case_name_template": "case_{case_num:03d}_{terrain_index}_{rotation_degree:03d}deg",
     },
     "openfoam": {
         "end_time": 20000,

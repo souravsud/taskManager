@@ -71,7 +71,7 @@ input_format:
     - name: rotation_degree
       prefix: rotatedTerrain_
       suffix: _deg
-  case_name_template: "case_{terrain_index}_{rotation_degree:03d}deg"
+  case_name_template: "case_{case_num:03d}_{terrain_index}_{rotation_degree:03d}deg"
 
 hpc:
   account: your-hpc-account
@@ -105,10 +105,57 @@ input_format:
     - name: rotation
       prefix: rot_
       suffix: deg
-  case_name_template: "{terrain}_{velocity}ms_{rotation}deg"
+  case_name_template: "{case_num:03d}_{terrain}_{velocity}ms_{rotation}deg"
 ```
 
+### Case numbering
+
+`generate_all_cases()` automatically injects a `case_num` counter (starting at 1, in processing order) into each case. Use `{case_num:03d}` in `case_name_template` to prefix every output folder with a zero-padded sequence number — e.g., `case_001_…`, `case_002_…`. This makes it easy to track progress and correlate logs with output folders.
+
 The config file in the current working directory is loaded automatically; pass `config_path=` to override.
+
+## Cluster prerequisites
+
+This toolkit communicates with the HPC cluster over SSH. Before running any copy or job-submission steps, make sure the following are in place:
+
+### Passwordless SSH login
+
+Generate an SSH key pair (if you don't already have one) and copy the public key to the cluster:
+
+```bash
+ssh-keygen -t ed25519 -C "your-email@example.com"
+ssh-copy-id your-cluster-hostname
+```
+
+Verify that you can log in without being prompted for a password:
+
+```bash
+ssh your-cluster-hostname "echo ok"
+```
+
+If your cluster username differs from your local username, add a `User` directive to `~/.ssh/config` (see the ControlMaster section below) rather than embedding it in every command.
+
+### SSH ControlMaster (connection reuse)
+
+The toolkit opens many short SSH connections in quick succession (status checks, file transfers, job submissions). Adding a `ControlMaster` / `ControlPersist` stanza to your `~/.ssh/config` reuses the same TCP connection for all of them, which avoids repeated authentication handshakes and dramatically speeds things up:
+
+```
+Host your-cluster-hostname
+    User your-cluster-username
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+```
+
+Replace `your-cluster-hostname` with the value you set in `cluster.host`.
+
+### Known hosts
+
+Make sure the cluster host is already in `~/.ssh/known_hosts` (i.e., you have logged in at least once and accepted the host fingerprint). If not, do so before running the toolkit:
+
+```bash
+ssh-keyscan -H your-cluster-hostname >> ~/.ssh/known_hosts
+```
 
 ## Status tracking
 

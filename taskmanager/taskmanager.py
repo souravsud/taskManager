@@ -697,8 +697,9 @@ class OpenFOAMCaseGenerator:
         cases = self.find_cases()
         print(f"Found {len(cases)} cases")
 
-        for case_info in cases:
+        for case_num, case_info in enumerate(cases, start=1):
+            case_info = {**case_info, 'case_num': case_num}
             params = {k: v for k, v in case_info.items() if k not in ('case_dir', 'metadata')}
-            print(f"Processing {params}")
+            print(f"Processing [{case_num}/{len(cases)}] {params}")
             output = self.setup_case(case_info)
             print(f"  → {output}")
