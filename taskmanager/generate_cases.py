@@ -11,8 +11,8 @@ def build_parser():
     )
     parser.add_argument(
         "--config-path",
-        default="taskmanager_config.yaml",
-        help="Path to YAML config file (default: taskmanager_config.yaml).",
+        default=None,
+        help="Optional path to YAML config file (default: packaged taskmanager config).",
     )
     parser.add_argument(
         "--template-path",

@@ -32,6 +32,8 @@ hpc:
   ntasks: 128
   walltime: "10:00:00"
   openfoam_version: your-openfoam-module
+  email_id: your-email@example.com
+  email_type: FAIL
 
 parallel:
   mesh_workers: 4

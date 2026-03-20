@@ -19,7 +19,7 @@ solvers
     {
         solver          GAMG;
         tolerance       1e-6;
-        relTol          0.01;
+        relTol          0.1;
         smoother        DICGaussSeidel;
         nPreSweeps      1;
         nPostSweeps     2;
@@ -62,12 +62,12 @@ SIMPLE
 {
     nNonOrthogonalCorrectors 2;
 
-    //residualControl
-    /* {
+    residualControl
+    {
         p               1e-4;
         U               1e-4;
         "(k|epsilon)"   1e-5;
-    } */
+    }
     pRefPoint       ({{easting}} {{northing}} 2500);    // replace with your coordinates
     pRefValue       0;
 }
