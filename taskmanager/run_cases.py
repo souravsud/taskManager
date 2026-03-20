@@ -1,7 +1,7 @@
 import argparse
 
-from config_utils import load_runtime_config, required_path
-from taskManager import OpenFOAMCaseGenerator
+from .config_utils import load_runtime_config, required_path
+from .taskmanager import OpenFOAMCaseGenerator
 
 
 def build_parser():
@@ -16,9 +16,6 @@ def build_parser():
     return parser
 
 
-# ============================
-# MAIN
-# ============================
 if __name__ == "__main__":
     args = build_parser().parse_args()
     config, _ = load_runtime_config(args.config_path)
@@ -34,7 +31,7 @@ if __name__ == "__main__":
         output_dir=required_path(config, "output_dir"),
         config_path=args.config_path,
     )
-    
+
     print("\n" + "="*60)
     print("Checking for meshed cases pending copy/submission...")
     print("="*60 + "\n")
@@ -51,7 +48,7 @@ if __name__ == "__main__":
     for case in all_cases:
         if not case.is_dir():
             continue
-            
+
         status = generator.get_status(case)
         if status and status["mesh_status"] == "NOT_RUN":
             cases_to_mesh.append(case)
@@ -62,7 +59,7 @@ if __name__ == "__main__":
         print("No cases need meshing.")
     else:
         print(f"Meshing {len(cases_to_mesh)} cases with {n_parallel_workers} workers...")
-        
+
         # Parallel meshing
         generator.mesh_cases_parallel(cases_to_mesh, n_workers=n_parallel_workers)
 
@@ -71,7 +68,7 @@ if __name__ == "__main__":
             print("\n" + "="*60)
             print("Auto-submission enabled")
             print("="*60 + "\n")
-            
+
             ready_cases = generator.list_ready_cases()
             for case in ready_cases:
                 generator.copy_and_submit(case)
@@ -80,16 +77,16 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("STATUS SUMMARY")
     print("="*60)
-    
+
     ready = generator.list_ready_cases()
     print(f"✓ Ready for submission: {len(ready)}")
-    
+
     failed = generator.list_failed_cases()
     if failed:
         print(f"✗ Failed meshing (needs manual intervention):")
         for case in failed:
             print(f"  - {case.name}")
-    
+
     # Show submitted jobs
     submitted_cases = generator.list_cases_by_status(submitted=True)
     if submitted_cases:
@@ -99,5 +96,5 @@ if __name__ == "__main__":
             job_id = status.get("job_id", "N/A")
             job_status = status.get("job_status", "N/A")
             print(f"  - {case.name}: Job {job_id} [{job_status}]")
-    
+
     print("="*60)

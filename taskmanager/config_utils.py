@@ -79,6 +79,9 @@ def load_yaml_config(config_path):
 def resolve_config_path(config_path=None):
     if config_path:
         return Path(config_path).expanduser()
+    cwd_config = Path.cwd() / "taskmanager_config.yaml"
+    if cwd_config.exists():
+        return cwd_config
     return Path(__file__).resolve().parent / "taskmanager_config.yaml"
 
 

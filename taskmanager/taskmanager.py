@@ -7,7 +7,7 @@ import subprocess
 from multiprocessing import Pool
 from datetime import datetime
 
-from config_utils import load_runtime_config
+from .config_utils import load_runtime_config
 
 
 class OpenFOAMCaseGenerator:

@@ -1,0 +1,45 @@
+# Central settings for taskManager scripts and OpenFOAMCaseGenerator
+# Edit this file instead of changing hardcoded values in Python files.
+
+deucalion:
+  host: deucalion
+  remote_base_path: /projects/EEHPC-BEN-2026B02-011/cfd_data
+
+paths:
+  template_path: ./template
+  input_dir: /path/to/downloads
+  output_dir: /path/to/openFoamCases
+
+openfoam:
+  end_time: 20000
+  write_interval: 5000
+  run_stage_mesh: mesh
+
+hpc:
+  account: eehpc-ben-2026b02-011x
+  partition: normal-x86
+  nodes: 1
+  ntasks: 128
+  walltime: "10:00:00"
+  openfoam_version: v2506-foss-2025a
+
+parallel:
+  mesh_workers: 4
+  fetch_workers: 2
+
+timeouts:
+  job_status_ssh: 15
+  remote_list_timesteps: 10
+  fetch_postprocessing: 120
+  fetch_log_list: 10
+  fetch_single_log: 60
+  fetch_last_timestep: 300
+
+run_cases:
+  n_cases_to_mesh: 4
+  n_parallel_workers: 4
+  auto_submit: true
+
+monitor_jobs:
+  check_interval_minutes: 120
+  max_iterations: null

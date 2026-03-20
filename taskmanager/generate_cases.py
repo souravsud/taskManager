@@ -1,8 +1,8 @@
 import argparse
 from pathlib import Path
 
-from config_utils import get_path_value, load_runtime_config
-from taskManager import OpenFOAMCaseGenerator
+from .config_utils import get_path_value, load_runtime_config
+from .taskmanager import OpenFOAMCaseGenerator
 
 
 def build_parser():
