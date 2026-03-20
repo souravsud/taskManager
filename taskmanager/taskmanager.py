@@ -47,9 +47,8 @@ class OpenFOAMCaseGenerator:
         case_info = []
 
         metadata_filename = self.input_format["metadata_filename"]
-        terrain_prefix = self.input_format["terrain_folder_prefix"]
-        rotation_prefix = self.input_format["rotation_folder_prefix"]
-        rotation_suffix = self.input_format["rotation_folder_suffix"]
+        folder_levels = self.input_format.get("folder_levels", [])
+        n_levels = len(folder_levels)
 
         for root, dirs, files in os.walk(self.input_root):
             if metadata_filename not in files:
@@ -59,30 +58,37 @@ class OpenFOAMCaseGenerator:
             with open(metadata_path) as f:
                 metadata = json.load(f)
 
-            case_path = Path(root)
-            rotation_folder = case_path.name
-            terrain_folder = case_path.parent.name
+            # Walk up n_levels folders above the metadata file to extract param values
+            params = {}
+            if folder_levels:
+                ancestors = []
+                p = Path(root)
+                for _ in range(n_levels):
+                    ancestors.append(p.name)
+                    p = p.parent
+                ancestors.reverse()  # outermost first
 
-            terrain_index = None
-            location = None
-            if terrain_folder.startswith(terrain_prefix):
-                parts = terrain_folder.split('_')
-                if len(parts) >= 2:
-                    terrain_index = parts[1]
-                    if len(parts) >= 6:
-                        location = f"{parts[2]}.{parts[3]} {parts[4]}.{parts[5]}"
-
-            rotation_degree = None
-            if rotation_folder.startswith(rotation_prefix) and rotation_folder.endswith(rotation_suffix):
-                degree_part = rotation_folder[len(rotation_prefix):-len(rotation_suffix)]
-                if degree_part.isdigit():
-                    rotation_degree = int(degree_part)
+                for level, folder_name in zip(folder_levels, ancestors):
+                    value = folder_name
+                    prefix = level.get("prefix", "")
+                    suffix = level.get("suffix", "")
+                    if prefix and value.startswith(prefix):
+                        value = value[len(prefix):]
+                    if suffix and value.endswith(suffix):
+                        value = value[:-len(suffix)]
+                    # Attempt numeric conversion to support format specs like {:03d}
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        try:
+                            value = float(value)
+                        except (ValueError, TypeError):
+                            pass
+                    params[level["name"]] = value
 
             case_info.append({
                 'case_dir': root,
-                'terrain_index': terrain_index,
-                'location': location,
-                'rotation_degree': rotation_degree,
+                **params,
                 'metadata': metadata
             })
 
@@ -112,10 +118,10 @@ class OpenFOAMCaseGenerator:
         case_name = self.input_format["case_name_template"].format(**case_info)
         output_case = self.output_dir / case_name
 
+        # Build template context from all extracted folder-level params + metadata
+        params = {k: v for k, v in case_info.items() if k not in ('case_dir', 'metadata')}
         context = {
-            'terrain_index': case_info['terrain_index'],
-            'rotation_degree': case_info['rotation_degree'],
-            'location': case_info['location'],
+            **params,
             'end_time': self.openfoam_defaults["end_time"],
             'write_interval': self.openfoam_defaults["write_interval"],
             'n_procs': self.hpc_defaults["ntasks"],
@@ -141,7 +147,7 @@ class OpenFOAMCaseGenerator:
         self.render_hpc_script(output_case, case_name)
 
         # Copy metadata
-        metadata_dest = output_case / 'pipeline_metadata.json'
+        metadata_dest = output_case / self.input_format["metadata_filename"]
         with open(metadata_dest, 'w') as f:
             json.dump(case_info['metadata'], f, indent=2)
 
@@ -150,7 +156,7 @@ class OpenFOAMCaseGenerator:
             case_info['case_dir'],
             output_case,
             dirs_exist_ok=True,
-            ignore=ignore_patterns('*.png', '*.vtk', 'pipeline_metadata.json')
+            ignore=ignore_patterns('*.png', '*.vtk', self.input_format["metadata_filename"])
         )
 
         # Initialize status file
@@ -692,6 +698,7 @@ class OpenFOAMCaseGenerator:
         print(f"Found {len(cases)} cases")
 
         for case_info in cases:
-            print(f"Processing terrain_{case_info['terrain_index']} @ {case_info['rotation_degree']}°")
+            params = {k: v for k, v in case_info.items() if k not in ('case_dir', 'metadata')}
+            print(f"Processing {params}")
             output = self.setup_case(case_info)
             print(f"  → {output}")

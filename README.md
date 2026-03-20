@@ -65,15 +65,47 @@ cluster:
 
 input_format:
   metadata_filename: pipeline_metadata.json
-  terrain_folder_prefix: terrain_
-  rotation_folder_prefix: rotatedTerrain_
-  rotation_folder_suffix: _deg
+  folder_levels:
+    - name: terrain_index
+      prefix: terrain_
+    - name: rotation_degree
+      prefix: rotatedTerrain_
+      suffix: _deg
   case_name_template: "case_{terrain_index}_{rotation_degree:03d}deg"
 
 hpc:
   account: your-hpc-account
   ntasks: 128
   walltime: "10:00:00"
+```
+
+### Customising the folder structure
+
+`folder_levels` describes the folder hierarchy inside `input_dir`, from outermost to innermost, ending at the folder that contains the metadata file. Each level has:
+
+| key | required | description |
+|-----|----------|-------------|
+| `name` | yes | Parameter name exposed to templates and `case_name_template` |
+| `prefix` | no | Strip this prefix from the folder name when extracting the value |
+| `suffix` | no | Strip this suffix from the folder name when extracting the value |
+
+Values that look like integers are converted automatically, so format specs like `{speed:03d}` work as expected.
+
+**Example — three-level structure** (`terrain/velocity/rotation`):
+
+```yaml
+input_format:
+  metadata_filename: case_metadata.json
+  folder_levels:
+    - name: terrain
+      prefix: terrain_
+    - name: velocity
+      prefix: vel_
+      suffix: ms
+    - name: rotation
+      prefix: rot_
+      suffix: deg
+  case_name_template: "{terrain}_{velocity}ms_{rotation}deg"
 ```
 
 The config file in the current working directory is loaded automatically; pass `config_path=` to override.

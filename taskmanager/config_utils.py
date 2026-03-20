@@ -14,9 +14,10 @@ DEFAULT_CONFIG = {
     },
     "input_format": {
         "metadata_filename": "pipeline_metadata.json",
-        "terrain_folder_prefix": "terrain_",
-        "rotation_folder_prefix": "rotatedTerrain_",
-        "rotation_folder_suffix": "_deg",
+        "folder_levels": [
+            {"name": "terrain_index", "prefix": "terrain_"},
+            {"name": "rotation_degree", "prefix": "rotatedTerrain_", "suffix": "_deg"},
+        ],
         "case_name_template": "case_{terrain_index}_{rotation_degree:03d}deg",
     },
     "openfoam": {
