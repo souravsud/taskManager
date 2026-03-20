@@ -59,11 +59,19 @@ paths:
   input_dir: /path/to/downloads
   output_dir: /path/to/openFoamCases
 
-deucalion:
-  remote_base_path: /projects/.../cfd_data
+cluster:
+  host: your-cluster-hostname
+  remote_base_path: /path/to/remote/cfd_data
+
+input_format:
+  metadata_filename: pipeline_metadata.json
+  terrain_folder_prefix: terrain_
+  rotation_folder_prefix: rotatedTerrain_
+  rotation_folder_suffix: _deg
+  case_name_template: "case_{terrain_index}_{rotation_degree:03d}deg"
 
 hpc:
-  account: your-account
+  account: your-hpc-account
   ntasks: 128
   walltime: "10:00:00"
 ```

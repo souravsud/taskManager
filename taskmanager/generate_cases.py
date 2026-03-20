@@ -30,19 +30,19 @@ def build_parser():
         help="Optional override for paths.output_dir from config.",
     )
     parser.add_argument(
-        "--deucalion-path",
+        "--cluster-path",
         default=None,
-        help="Optional remote deucalion path used later for copy/submission workflows.",
+        help="Optional remote HPC cluster path used later for copy/submission workflows.",
     )
     return parser
 
 
-def run_generate_cases(template_path, input_dir, output_dir, deucalion_path=None):
+def run_generate_cases(template_path, input_dir, output_dir, cluster_path=None):
     generator = OpenFOAMCaseGenerator(
         template_path=template_path,
         input_dir=input_dir,
         output_dir=output_dir,
-        deucalion_path=deucalion_path,
+        cluster_path=cluster_path,
     )
     generator.generate_all_cases()
 
@@ -56,15 +56,18 @@ def main(argv=None):
     input_dir = get_path_value(args.input_dir, config, "input_dir")
     output_dir = get_path_value(args.output_dir, config, "output_dir")
 
-    deucalion_path = args.deucalion_path
-    if deucalion_path is None:
-        deucalion_path = config.get("deucalion", {}).get("remote_base_path")
+    cluster_path = args.cluster_path
+    if cluster_path is None:
+        cluster_path = (
+            config.get("cluster", {}).get("remote_base_path")
+            or config.get("deucalion", {}).get("remote_base_path")
+        )
 
     run_generate_cases(
         template_path=str(Path(template_path).expanduser()),
         input_dir=str(Path(input_dir).expanduser()),
         output_dir=str(Path(output_dir).expanduser()),
-        deucalion_path=deucalion_path,
+        cluster_path=cluster_path,
     )
 
 

@@ -1,14 +1,21 @@
 # Central settings for taskManager scripts and OpenFOAMCaseGenerator
 # Edit this file instead of changing hardcoded values in Python files.
 
-deucalion:
-  host: deucalion
-  remote_base_path: /projects/EEHPC-BEN-2026B02-011/cfd_data
+cluster:
+  host: your-cluster-hostname
+  remote_base_path: /path/to/remote/cfd_data
 
 paths:
   template_path: ./template
   input_dir: /path/to/downloads
   output_dir: /path/to/openFoamCases
+
+input_format:
+  metadata_filename: pipeline_metadata.json
+  terrain_folder_prefix: terrain_
+  rotation_folder_prefix: rotatedTerrain_
+  rotation_folder_suffix: _deg
+  case_name_template: "case_{terrain_index}_{rotation_degree:03d}deg"
 
 openfoam:
   end_time: 20000
@@ -16,12 +23,12 @@ openfoam:
   run_stage_mesh: mesh
 
 hpc:
-  account: eehpc-ben-2026b02-011x
-  partition: normal-x86
+  account: your-hpc-account
+  partition: your-partition
   nodes: 1
   ntasks: 128
   walltime: "10:00:00"
-  openfoam_version: v2506-foss-2025a
+  openfoam_version: your-openfoam-module
 
 parallel:
   mesh_workers: 4
