@@ -20,19 +20,22 @@ class OpenFOAMCaseGenerator:
 
         self.config, self.config_path = load_runtime_config(config_path)
 
-        self.deucalion_host = self.config["deucalion"]["host"]
-        configured_remote_path = self.config["deucalion"].get("remote_base_path")
+        cluster_config = self.config.get("cluster", {})
+        legacy_config = self.config.get("deucalion", {})
+        self.cluster_host = cluster_config.get("host") or legacy_config.get("host")
+        configured_remote_path = cluster_config.get("remote_base_path") or legacy_config.get("remote_base_path")
         self.cluster_path = cluster_path if cluster_path is not None else configured_remote_path
 
         self.hpc_defaults = self.config["hpc"]
         self.openfoam_defaults = self.config["openfoam"]
         self.parallel_defaults = self.config["parallel"]
         self.timeouts = self.config["timeouts"]
+        self.input_format = self.config["input_format"]
 
     def _require_cluster_path(self):
         if not self.cluster_path:
             raise ValueError(
-                "deucalion path is not configured. Set deucalion.remote_base_path in YAML "
+                "Remote cluster path is not configured. Set cluster.remote_base_path in YAML "
                 "or pass cluster_path to OpenFOAMCaseGenerator."
             )
 
@@ -43,38 +46,49 @@ class OpenFOAMCaseGenerator:
     def find_cases(self):
         case_info = []
 
+        metadata_filename = self.input_format["metadata_filename"]
+        folder_levels = self.input_format.get("folder_levels", [])
+        n_levels = len(folder_levels)
+
         for root, dirs, files in os.walk(self.input_root):
-            if 'pipeline_metadata.json' not in files:
+            if metadata_filename not in files:
                 continue
 
-            metadata_path = Path(root) / 'pipeline_metadata.json'
+            metadata_path = Path(root) / metadata_filename
             with open(metadata_path) as f:
                 metadata = json.load(f)
 
-            case_path = Path(root)
-            rotation_folder = case_path.name
-            terrain_folder = case_path.parent.name
+            # Walk up n_levels folders above the metadata file to extract param values
+            params = {}
+            if folder_levels:
+                ancestors = []
+                p = Path(root)
+                for _ in range(n_levels):
+                    ancestors.append(p.name)
+                    p = p.parent
+                ancestors.reverse()  # outermost first
 
-            terrain_index = None
-            location = None
-            if terrain_folder.startswith('terrain_'):
-                parts = terrain_folder.split('_')
-                if len(parts) >= 2:
-                    terrain_index = parts[1]
-                    if len(parts) >= 6:
-                        location = f"{parts[2]}.{parts[3]} {parts[4]}.{parts[5]}"
-
-            rotation_degree = None
-            if rotation_folder.startswith('rotatedTerrain_') and rotation_folder.endswith('_deg'):
-                degree_part = rotation_folder[len('rotatedTerrain_'):-len('_deg')]
-                if degree_part.isdigit():
-                    rotation_degree = int(degree_part)
+                for level, folder_name in zip(folder_levels, ancestors):
+                    value = folder_name
+                    prefix = level.get("prefix", "")
+                    suffix = level.get("suffix", "")
+                    if prefix and value.startswith(prefix):
+                        value = value[len(prefix):]
+                    if suffix and value.endswith(suffix):
+                        value = value[:-len(suffix)]
+                    # Attempt numeric conversion to support format specs like {:03d}
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        try:
+                            value = float(value)
+                        except (ValueError, TypeError):
+                            pass
+                    params[level["name"]] = value
 
             case_info.append({
                 'case_dir': root,
-                'terrain_index': terrain_index,
-                'location': location,
-                'rotation_degree': rotation_degree,
+                **params,
                 'metadata': metadata
             })
 
@@ -101,13 +115,13 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def setup_case(self, case_info):
-        case_name = f"case_{case_info['terrain_index']}_{case_info['rotation_degree']:03d}deg"
+        case_name = self.input_format["case_name_template"].format(**case_info)
         output_case = self.output_dir / case_name
 
+        # Build template context from all extracted folder-level params + metadata
+        params = {k: v for k, v in case_info.items() if k not in ('case_dir', 'metadata')}
         context = {
-            'terrain_index': case_info['terrain_index'],
-            'rotation_degree': case_info['rotation_degree'],
-            'location': case_info['location'],
+            **params,
             'end_time': self.openfoam_defaults["end_time"],
             'write_interval': self.openfoam_defaults["write_interval"],
             'n_procs': self.hpc_defaults["ntasks"],
@@ -133,7 +147,7 @@ class OpenFOAMCaseGenerator:
         self.render_hpc_script(output_case, case_name)
 
         # Copy metadata
-        metadata_dest = output_case / 'pipeline_metadata.json'
+        metadata_dest = output_case / self.input_format["metadata_filename"]
         with open(metadata_dest, 'w') as f:
             json.dump(case_info['metadata'], f, indent=2)
 
@@ -142,7 +156,7 @@ class OpenFOAMCaseGenerator:
             case_info['case_dir'],
             output_case,
             dirs_exist_ok=True,
-            ignore=ignore_patterns('*.png', '*.vtk', 'pipeline_metadata.json')
+            ignore=ignore_patterns('*.png', '*.vtk', self.input_format["metadata_filename"])
         )
 
         # Initialize status file
@@ -290,16 +304,16 @@ class OpenFOAMCaseGenerator:
             os.chmod(case_path / "openfoam.sh", 0o755)
 
     # --------------------------------------------------
-    # DEUCALION COPY
+    # CLUSTER COPY
     # --------------------------------------------------
 
-    def copy_to_deucalion(self, case_path):
-        """Copy meshed case to deucalion using rsync with compression"""
+    def copy_to_cluster(self, case_path):
+        """Copy meshed case to the remote HPC cluster using rsync with compression"""
         case_path = Path(case_path)
         case_name = case_path.name
         self._require_cluster_path()
         
-        print(f"[COPY START] {case_name} -> {self.deucalion_host}")
+        print(f"[COPY START] {case_name} -> {self.cluster_host}")
 
         try:
             # Rsync with compression, preserve permissions
@@ -308,7 +322,7 @@ class OpenFOAMCaseGenerator:
                 "-avz",  # archive, verbose, compress
                 "--progress",
                 f"{case_path}/",
-                f"{self.deucalion_host}:{self.cluster_path}/{case_name}/"
+                f"{self.cluster_host}:{self.cluster_path}/{case_name}/"
             ]
 
             result = subprocess.run(
@@ -339,10 +353,10 @@ class OpenFOAMCaseGenerator:
         print(f"[SUBMIT START] {case_name}")
 
         try:
-            # SSH into deucalion and submit
+            # SSH into cluster and submit
             cmd = [
                 "ssh",
-                self.deucalion_host,
+                self.cluster_host,
                 f"cd {self.cluster_path}/{case_name} && sbatch openfoam.sh"
             ]
 
@@ -387,7 +401,7 @@ class OpenFOAMCaseGenerator:
             # Try squeue first (for running/pending jobs)
             cmd = f"squeue -j {job_id} --noheader --format=%T"
             result = subprocess.run(
-                ["ssh", self.deucalion_host, cmd],
+                ["ssh", self.cluster_host, cmd],
                 capture_output=True,
                 text=True,
                 timeout=self.timeouts["job_status_ssh"]
@@ -400,7 +414,7 @@ class OpenFOAMCaseGenerator:
             # If not in squeue, check sacct (for completed jobs)
             cmd = f"sacct -j {job_id} --noheader --format=State -P 2>/dev/null | head -1"
             result = subprocess.run(
-                ["ssh", self.deucalion_host, cmd],
+                ["ssh", self.cluster_host, cmd],
                 capture_output=True,
                 text=True,
                 timeout=self.timeouts["job_status_ssh"]
@@ -482,7 +496,7 @@ class OpenFOAMCaseGenerator:
         if not status:
             return
         if not status.get("copied_to_hpc"):
-            if self.copy_to_deucalion(case):
+            if self.copy_to_cluster(case):
                 self.submit_case(case)
         elif not status.get("submitted"):
             self.submit_case(case)
@@ -519,7 +533,7 @@ class OpenFOAMCaseGenerator:
             # List all numeric directories in the remote case
             cmd = f"ls -1 {case_path_remote} | grep -E '^[0-9]+$' | sort -n"
             result = subprocess.run(
-                ["ssh", self.deucalion_host, cmd],
+                ["ssh", self.cluster_host, cmd],
                 capture_output=True,
                 text=True,
                 timeout=self.timeouts["remote_list_timesteps"]
@@ -559,7 +573,7 @@ class OpenFOAMCaseGenerator:
         if case_remote is None:
             case_remote = f"{self.cluster_path}/{case_name}"
         
-        print(f"[FETCH START] {case_name} from {self.deucalion_host}")
+        print(f"[FETCH START] {case_name} from {self.cluster_host}")
         
         try:
             # 1. Fetch postProcessing folder if requested
@@ -568,7 +582,7 @@ class OpenFOAMCaseGenerator:
                 cmd = [
                     "rsync",
                     "-avz",
-                    f"{self.deucalion_host}:{case_remote}/postProcessing/",
+                    f"{self.cluster_host}:{case_remote}/postProcessing/",
                     str(case_local) + "/postProcessing/"
                 ]
                 try:
@@ -590,7 +604,7 @@ class OpenFOAMCaseGenerator:
                 # Get list of logs on remote
                 cmd_str = "ls -1 {} | grep '^log\\.' | grep -v -E '(blockMesh|checkMesh)'".format(case_remote)
                 result = subprocess.run(
-                    ["ssh", self.deucalion_host, cmd_str],
+                    ["ssh", self.cluster_host, cmd_str],
                     capture_output=True,
                     text=True,
                     timeout=self.timeouts["fetch_log_list"]
@@ -600,7 +614,7 @@ class OpenFOAMCaseGenerator:
                     log_files = result.stdout.strip().split('\n')
                     for log_file in log_files:
                         try:
-                            remote_file = f"{self.deucalion_host}:{case_remote}/{log_file}"
+                            remote_file = f"{self.cluster_host}:{case_remote}/{log_file}"
                             local_file = case_local / log_file
                             subprocess.run(
                                 ["rsync", "-avz", remote_file, str(local_file)],
@@ -627,7 +641,7 @@ class OpenFOAMCaseGenerator:
                         cmd = [
                             "rsync",
                             "-avz",
-                            f"{self.deucalion_host}:{case_remote}/{last_ts}/",
+                            f"{self.cluster_host}:{case_remote}/{last_ts}/",
                             str(case_local / str(last_ts)) + "/"
                         ]
                         subprocess.run(
@@ -683,7 +697,9 @@ class OpenFOAMCaseGenerator:
         cases = self.find_cases()
         print(f"Found {len(cases)} cases")
 
-        for case_info in cases:
-            print(f"Processing terrain_{case_info['terrain_index']} @ {case_info['rotation_degree']}°")
+        for case_num, case_info in enumerate(cases, start=1):
+            case_info = {**case_info, 'case_num': case_num}
+            params = {k: v for k, v in case_info.items() if k not in ('case_dir', 'metadata')}
+            print(f"Processing [{case_num}/{len(cases)}] {params}")
             output = self.setup_case(case_info)
             print(f"  → {output}")

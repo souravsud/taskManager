@@ -3,8 +3,8 @@ from pathlib import Path
 
 
 DEFAULT_CONFIG = {
-    "deucalion": {
-        "host": "deucalion",
+    "cluster": {
+        "host": None,
         "remote_base_path": None,
     },
     "paths": {
@@ -12,18 +12,26 @@ DEFAULT_CONFIG = {
         "input_dir": None,
         "output_dir": None,
     },
+    "input_format": {
+        "metadata_filename": "pipeline_metadata.json",
+        "folder_levels": [
+            {"name": "terrain_index", "prefix": "terrain_"},
+            {"name": "rotation_degree", "prefix": "rotatedTerrain_", "suffix": "_deg"},
+        ],
+        "case_name_template": "case_{case_num:03d}_{terrain_index}_{rotation_degree:03d}deg",
+    },
     "openfoam": {
         "end_time": 20000,
         "write_interval": 5000,
         "run_stage_mesh": "mesh",
     },
     "hpc": {
-        "account": "eehpc-ben-2026b02-011x",
-        "partition": "normal-x86",
+        "account": None,
+        "partition": None,
         "nodes": 1,
         "ntasks": 128,
         "walltime": "10:00:00",
-        "openfoam_version": "v2506-foss-2025a",
+        "openfoam_version": None,
     },
     "parallel": {
         "mesh_workers": 4,
