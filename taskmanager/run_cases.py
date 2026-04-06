@@ -1,6 +1,7 @@
 import argparse
 
 from .config_utils import load_runtime_config, required_path
+from .constants import MeshStatus
 from .taskmanager import OpenFOAMCaseGenerator
 
 
@@ -16,8 +17,8 @@ def build_parser():
     return parser
 
 
-if __name__ == "__main__":
-    args = build_parser().parse_args()
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     config, _ = load_runtime_config(args.config_path)
 
     run_settings = config.get("run_cases", {})
@@ -50,7 +51,7 @@ if __name__ == "__main__":
             continue
 
         status = generator.get_status(case)
-        if status and status["mesh_status"] == "NOT_RUN":
+        if status and status["mesh_status"] == MeshStatus.NOT_RUN:
             cases_to_mesh.append(case)
             if len(cases_to_mesh) >= n_cases_to_mesh:
                 break
@@ -98,3 +99,7 @@ if __name__ == "__main__":
             print(f"  - {case.name}: Job {job_id} [{job_status}]")
 
     print("="*60)
+
+
+if __name__ == "__main__":
+    main()
