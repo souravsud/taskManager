@@ -143,13 +143,27 @@ class OpenFOAMCaseGenerator:
 
         # Build template context from all extracted folder-level params + metadata
         params = {k: v for k, v in case_info.items() if k not in ('case_dir', 'metadata')}
+        metadata = case_info['metadata']
+        terrain_config = metadata.get('configurations', {}).get('terrain', {})
+        coverage = metadata.get('processing_results', {}).get('geographic_coverage', {})
+        grid_stats = metadata.get('processing_results', {}).get('grid_statistics', {})
+
+        easting = terrain_config.get('easting')
+        northing = terrain_config.get('northing')
+        bounds = grid_stats.get('bounds')
+        if (easting is None or northing is None) and isinstance(bounds, list) and len(bounds) >= 4:
+            easting = 0.5 * (float(bounds[0]) + float(bounds[1]))
+            northing = 0.5 * (float(bounds[2]) + float(bounds[3]))
+
         context = {
             **params,
             'end_time': self.openfoam_defaults["end_time"],
             'write_interval': self.openfoam_defaults["write_interval"],
             'n_procs': self.hpc_defaults["ntasks"],
-            'wind_direction': case_info['metadata'].get('wind_direction_deg', 0),
-            **case_info['metadata']
+            'wind_direction': coverage.get('wind_direction_deg', terrain_config.get('rotation_deg', 0)),
+            'easting': easting,
+            'northing': northing,
+            **metadata
         }
 
         # Copy template
