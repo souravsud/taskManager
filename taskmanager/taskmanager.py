@@ -663,8 +663,22 @@ class OpenFOAMCaseGenerator:
             print(f"    ✗ Failed to fetch timestep {last_ts}: {e}")
             return False
 
+    def _fetch_extra_files(self, case_local, case_remote, patterns):
+        """Rsync extra files/globs from the remote case root to the local case directory."""
+        print(f"  → Fetching extra files: {patterns}")
+        for pattern in patterns:
+            try:
+                subprocess.run(
+                    ["rsync", "-avz", f"{self.cluster_host}:{case_remote}/{pattern}", str(case_local) + "/"],
+                    check=False,
+                    capture_output=True,
+                    timeout=self.timeouts.get("fetch_single_log", 60),
+                )
+            except Exception as e:
+                print(f"    ⚠ Failed to fetch '{pattern}': {e}")
+
     def fetch_case_results(self, case_local, case_remote=None, fetch_last_timestep=True,
-                           fetch_postprocessing=True, fetch_logs=True):
+                           fetch_postprocessing=True, fetch_logs=True, extra_files=None):
         """
         Fetch selected results from HPC back to local machine.
 
@@ -674,6 +688,8 @@ class OpenFOAMCaseGenerator:
             fetch_last_timestep: Fetch only the last saved timestep directory
             fetch_postprocessing: Fetch postProcessing/ folder
             fetch_logs: Fetch log files (but not blockMesh/checkMesh)
+            extra_files: Optional list of file names, relative paths, or shell glob patterns
+                (e.g. ``["slurm*", "foam.log"]``) to rsync from the remote case root.
 
         Returns:
             bool: True if successful, False otherwise
@@ -697,6 +713,9 @@ class OpenFOAMCaseGenerator:
             if fetch_last_timestep:
                 if not self._fetch_last_timestep(case_local, case_remote):
                     return False
+
+            if extra_files:
+                self._fetch_extra_files(case_local, case_remote, extra_files)
 
             print(f"[FETCH OK] {case_name}")
             return True
