@@ -3,11 +3,14 @@ from shutil import copytree, ignore_patterns
 from jinja2 import Template
 import json
 import os
+import re
 import subprocess
+import warnings
 from multiprocessing import Pool
 from datetime import datetime
 
 from .config_utils import load_runtime_config
+from .constants import MeshStatus, JobStatus
 
 
 class OpenFOAMCaseGenerator:
@@ -22,6 +25,12 @@ class OpenFOAMCaseGenerator:
 
         cluster_config = self.config.get("cluster", {})
         legacy_config = self.config.get("deucalion", {})
+        if legacy_config:
+            warnings.warn(
+                "The 'deucalion' config key is deprecated. Use 'cluster' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.cluster_host = cluster_config.get("host") or legacy_config.get("host")
         configured_remote_path = cluster_config.get("remote_base_path") or legacy_config.get("remote_base_path")
         self.cluster_path = cluster_path if cluster_path is not None else configured_remote_path
@@ -31,6 +40,28 @@ class OpenFOAMCaseGenerator:
         self.parallel_defaults = self.config["parallel"]
         self.timeouts = self.config["timeouts"]
         self.input_format = self.config["input_format"]
+
+    # --------------------------------------------------
+    # UTILITIES
+    # --------------------------------------------------
+
+    @staticmethod
+    def _as_path(p):
+        """Normalise a str-or-Path argument to a Path object."""
+        return p if isinstance(p, Path) else Path(p)
+
+    @staticmethod
+    def _coerce_value(s):
+        """Try to convert a string to int, then float; return the original string on failure."""
+        try:
+            return int(s)
+        except (ValueError, TypeError):
+            pass
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            pass
+        return s
 
     def _require_cluster_path(self):
         if not self.cluster_path:
@@ -76,15 +107,7 @@ class OpenFOAMCaseGenerator:
                         value = value[len(prefix):]
                     if suffix and value.endswith(suffix):
                         value = value[:-len(suffix)]
-                    # Attempt numeric conversion to support format specs like {:03d}
-                    try:
-                        value = int(value)
-                    except (ValueError, TypeError):
-                        try:
-                            value = float(value)
-                        except (ValueError, TypeError):
-                            pass
-                    params[level["name"]] = value
+                    params[level["name"]] = self._coerce_value(value)
 
             case_info.append({
                 'case_dir': root,
@@ -100,7 +123,7 @@ class OpenFOAMCaseGenerator:
 
     def render_j2_file(self, j2_path, context):
         """Render a Jinja2 .j2 template file, write output without the .j2 suffix, then delete the template."""
-        j2_path = Path(j2_path)
+        j2_path = self._as_path(j2_path)
         if j2_path.suffix != '.j2':
             raise ValueError(f"Expected a .j2 file, got: {j2_path}")
         output_path = j2_path.with_suffix('')
@@ -169,12 +192,12 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def initialize_case_status(self, case_path):
-        case_path = Path(case_path)
+        case_path = self._as_path(case_path)
         status_file = case_path / "case_status.json"
 
         if not status_file.exists():
             status = {
-                "mesh_status": "NOT_RUN",
+                "mesh_status": MeshStatus.NOT_RUN,
                 "mesh_ok": False,
                 "copied_to_hpc": False,
                 "submitted": False,
@@ -188,7 +211,7 @@ class OpenFOAMCaseGenerator:
                 json.dump(status, f, indent=2)
 
     def update_status(self, case_path, updates):
-        case_path = Path(case_path)
+        case_path = self._as_path(case_path)
         status_file = case_path / "case_status.json"
         with open(status_file) as f:
             status = json.load(f)
@@ -199,7 +222,7 @@ class OpenFOAMCaseGenerator:
             json.dump(status, f, indent=2)
 
     def get_status(self, case_path):
-        case_path = Path(case_path)
+        case_path = self._as_path(case_path)
         status_file = case_path / "case_status.json"
         if not status_file.exists():
             return None
@@ -212,7 +235,7 @@ class OpenFOAMCaseGenerator:
 
     def mesh_case(self, case_path):
         """Mesh a single case - designed to be called by parallel workers"""
-        case_path = Path(case_path)  # Ensure Path object
+        case_path = self._as_path(case_path)
         print(f"[MESH START] {case_path.name}")
 
         try:
@@ -238,21 +261,21 @@ class OpenFOAMCaseGenerator:
                 if "Mesh OK" in content:
                     print(f"[MESH OK] {case_path.name}")
                     self.update_status(case_path, {
-                        "mesh_status": "DONE",
+                        "mesh_status": MeshStatus.DONE,
                         "mesh_ok": True
                     })
                     return True
                 else:
                     print(f"[MESH FAILED] {case_path.name}")
                     self.update_status(case_path, {
-                        "mesh_status": "FAILED",
+                        "mesh_status": MeshStatus.FAILED,
                         "mesh_ok": False
                     })
                     return False
             else:
                 print(f"[MESH ERROR] No log.checkMesh found for {case_path.name}")
                 self.update_status(case_path, {
-                    "mesh_status": "ERROR",
+                    "mesh_status": MeshStatus.ERROR,
                     "mesh_ok": False
                 })
                 return False
@@ -260,7 +283,7 @@ class OpenFOAMCaseGenerator:
         except subprocess.CalledProcessError as e:
             print(f"[MESH ERROR] {case_path.name}: {e}")
             self.update_status(case_path, {
-                "mesh_status": "ERROR",
+                "mesh_status": MeshStatus.ERROR,
                 "mesh_ok": False
             })
             return False
@@ -296,7 +319,7 @@ class OpenFOAMCaseGenerator:
     # --------------------------------------------------
 
     def render_hpc_script(self, case_path, case_name):
-        case_path = Path(case_path)
+        case_path = self._as_path(case_path)
         j2_file = case_path / "openfoam.sh.j2"
         if j2_file.exists():
             context = {"job_name": f"of_{case_name}", **self.hpc_defaults}
@@ -309,7 +332,7 @@ class OpenFOAMCaseGenerator:
 
     def copy_to_cluster(self, case_path):
         """Copy meshed case to the remote HPC cluster using rsync with compression"""
-        case_path = Path(case_path)
+        case_path = self._as_path(case_path)
         case_name = case_path.name
         self._require_cluster_path()
         
@@ -346,7 +369,7 @@ class OpenFOAMCaseGenerator:
 
     def submit_case(self, case_path):
         """Submit case to HPC via SSH sbatch"""
-        case_path = Path(case_path)
+        case_path = self._as_path(case_path)
         case_name = case_path.name
         self._require_cluster_path()
         
@@ -376,7 +399,7 @@ class OpenFOAMCaseGenerator:
                 self.update_status(case_path, {
                     "submitted": True,
                     "job_id": job_id,
-                    "job_status": "PENDING",
+                    "job_status": JobStatus.PENDING,
                     "last_checked": datetime.now().isoformat()
                 })
                 return job_id
@@ -395,7 +418,7 @@ class OpenFOAMCaseGenerator:
     def check_job_status(self, job_id):
         """Check job status using squeue/sacct with improved error handling"""
         if not job_id:
-            return "NO_JOB_ID"
+            return JobStatus.NO_JOB_ID
         
         try:
             # Try squeue first (for running/pending jobs)
@@ -425,13 +448,13 @@ class OpenFOAMCaseGenerator:
                 return status  # COMPLETED, FAILED, TIMEOUT, etc.
             
             # If we can't find it in either queue, assume UNKNOWN
-            return "UNKNOWN"
+            return JobStatus.UNKNOWN
 
         except subprocess.TimeoutExpired:
-            return "TIMEOUT"
+            return JobStatus.TIMEOUT
         except Exception as e:
             print(f"[STATUS CHECK ERROR] Job {job_id}: {e}")
-            return "ERROR"
+            return JobStatus.ERROR
 
     def update_job_status(self, case_path):
         """Update job status for a specific case"""
@@ -480,11 +503,11 @@ class OpenFOAMCaseGenerator:
 
     def list_ready_cases(self):
         """List cases ready for HPC submission (meshed but not submitted)"""
-        return self.list_cases_by_status(mesh_status="DONE", submitted=False)
+        return self.list_cases_by_status(mesh_status=MeshStatus.DONE, submitted=False)
 
     def list_failed_cases(self):
         """List cases with failed meshing"""
-        return self.list_cases_by_status(mesh_status=["FAILED", "ERROR"])
+        return self.list_cases_by_status(mesh_status=[MeshStatus.FAILED, MeshStatus.ERROR])
 
     # --------------------------------------------------
     # COPY + SUBMIT HELPER
@@ -507,7 +530,7 @@ class OpenFOAMCaseGenerator:
 
     def get_last_timestep(self, case_path):
         """Parse controlDict to get endTime (the last saved timestep)"""
-        case_path = Path(case_path)
+        case_path = self._as_path(case_path)
         control_dict = case_path / "system" / "controlDict"
         
         if not control_dict.exists():
@@ -518,7 +541,6 @@ class OpenFOAMCaseGenerator:
                 content = f.read()
             
             # Look for "endTime" entry (simple parsing)
-            import re
             match = re.search(r'endTime\s+(\d+);', content)
             if match:
                 return int(match.group(1))
@@ -551,115 +573,150 @@ class OpenFOAMCaseGenerator:
     # RESULT FETCHING FROM HPC
     # --------------------------------------------------
 
-    def fetch_case_results(self, case_local, case_remote=None, fetch_last_timestep=True, 
-                          fetch_postprocessing=True, fetch_logs=True):
+    def _fetch_postprocessing(self, case_local, case_remote):
+        """Rsync the postProcessing/ folder from the remote case."""
+        print(f"  → Fetching postProcessing/…")
+        cmd = [
+            "rsync",
+            "-avz",
+            f"{self.cluster_host}:{case_remote}/postProcessing/",
+            str(case_local) + "/postProcessing/"
+        ]
+        try:
+            subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                timeout=self.timeouts["fetch_postprocessing"],
+            )
+            print(f"    ✓ postProcessing synced")
+        except Exception as e:
+            print(f"    ⚠ postProcessing sync failed: {e}")
+
+    def _fetch_logs(self, case_local, case_remote):
+        """Rsync solver log files (excluding blockMesh/checkMesh) from the remote case."""
+        print(f"  → Fetching log files…")
+        cmd_str = "ls -1 {} | grep '^log\\.' | grep -v -E '(blockMesh|checkMesh)'".format(case_remote)
+        result = subprocess.run(
+            ["ssh", self.cluster_host, cmd_str],
+            capture_output=True,
+            text=True,
+            timeout=self.timeouts["fetch_log_list"]
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            log_files = result.stdout.strip().split('\n')
+            for log_file in log_files:
+                try:
+                    remote_file = f"{self.cluster_host}:{case_remote}/{log_file}"
+                    local_file = case_local / log_file
+                    subprocess.run(
+                        ["rsync", "-avz", remote_file, str(local_file)],
+                        check=False,
+                        capture_output=True,
+                        timeout=self.timeouts["fetch_single_log"]
+                    )
+                except Exception as e:
+                    print(f"    ⚠ Failed to fetch {log_file}: {e}")
+            print(f"    ✓ {len(log_files)} log file(s) synced")
+        else:
+            print(f"    ⚠ No log files found or error querying")
+
+    def _fetch_last_timestep(self, case_local, case_remote):
+        """Rsync the last available timestep directory from the remote case.
+
+        Args:
+            case_local (Path): Local case directory where the timestep will be written.
+            case_remote (str): Remote path to the case directory on the HPC cluster.
+
+        Returns:
+            bool: True if a timestep was successfully synced or none were found (non-fatal),
+                  False if a timestep existed but could not be fetched.
+        """
+        print(f"  → Fetching last timestep…")
+        timesteps = self.get_result_timesteps(case_remote)
+
+        if not timesteps:
+            print(f"    ⚠ No timestep directories found on remote")
+            return True  # non-fatal
+
+        last_ts = timesteps[-1]
+        print(f"    Last timestep found: {last_ts}")
+
+        try:
+            cmd = [
+                "rsync",
+                "-avz",
+                f"{self.cluster_host}:{case_remote}/{last_ts}/",
+                str(case_local / str(last_ts)) + "/"
+            ]
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=False,
+                timeout=self.timeouts["fetch_last_timestep"],
+            )
+            print(f"    ✓ Timestep {last_ts} synced")
+            self.update_status(case_local, {"results_fetched": True, "last_fetched_timestep": last_ts})
+            return True
+        except Exception as e:
+            print(f"    ✗ Failed to fetch timestep {last_ts}: {e}")
+            return False
+
+    def _fetch_extra_files(self, case_local, case_remote, patterns):
+        """Rsync extra files/globs from the remote case root to the local case directory."""
+        print(f"  → Fetching extra files: {patterns}")
+        for pattern in patterns:
+            try:
+                subprocess.run(
+                    ["rsync", "-avz", f"{self.cluster_host}:{case_remote}/{pattern}", str(case_local) + "/"],
+                    check=False,
+                    capture_output=True,
+                    timeout=self.timeouts.get("fetch_single_log", 60),
+                )
+            except Exception as e:
+                print(f"    ⚠ Failed to fetch '{pattern}': {e}")
+
+    def fetch_case_results(self, case_local, case_remote=None, fetch_last_timestep=True,
+                           fetch_postprocessing=True, fetch_logs=True, extra_files=None):
         """
         Fetch selected results from HPC back to local machine.
-        
+
         Args:
             case_local: Path to local case directory
             case_remote: Path to remote case on HPC (if None, constructed from case name)
             fetch_last_timestep: Fetch only the last saved timestep directory
             fetch_postprocessing: Fetch postProcessing/ folder
             fetch_logs: Fetch log files (but not blockMesh/checkMesh)
-            
+            extra_files: Optional list of file names, relative paths, or shell glob patterns
+                (e.g. ``["slurm*", "foam.log"]``) to rsync from the remote case root.
+
         Returns:
             bool: True if successful, False otherwise
         """
-        case_local = Path(case_local)
+        case_local = self._as_path(case_local)
         case_name = case_local.name
         self._require_cluster_path()
-        
+
         if case_remote is None:
             case_remote = f"{self.cluster_path}/{case_name}"
-        
+
         print(f"[FETCH START] {case_name} from {self.cluster_host}")
-        
+
         try:
-            # 1. Fetch postProcessing folder if requested
             if fetch_postprocessing:
-                print(f"  → Fetching postProcessing/…")
-                cmd = [
-                    "rsync",
-                    "-avz",
-                    f"{self.cluster_host}:{case_remote}/postProcessing/",
-                    str(case_local) + "/postProcessing/"
-                ]
-                try:
-                    subprocess.run(
-                        cmd,
-                        check=False,
-                        capture_output=True,
-                        timeout=self.timeouts["fetch_postprocessing"],
-                    )
-                    print(f"    ✓ postProcessing synced")
-                except Exception as e:
-                    print(f"    ⚠ postProcessing sync failed: {e}")
-            
-            # 2. Fetch log files (excluding blockMesh/checkMesh)
+                self._fetch_postprocessing(case_local, case_remote)
+
             if fetch_logs:
-                print(f"  → Fetching log files…")
-                excluded_logs = ["log.blockMesh", "log.checkMesh"]
-                
-                # Get list of logs on remote
-                cmd_str = "ls -1 {} | grep '^log\\.' | grep -v -E '(blockMesh|checkMesh)'".format(case_remote)
-                result = subprocess.run(
-                    ["ssh", self.cluster_host, cmd_str],
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeouts["fetch_log_list"]
-                )
-                
-                if result.returncode == 0 and result.stdout.strip():
-                    log_files = result.stdout.strip().split('\n')
-                    for log_file in log_files:
-                        try:
-                            remote_file = f"{self.cluster_host}:{case_remote}/{log_file}"
-                            local_file = case_local / log_file
-                            subprocess.run(
-                                ["rsync", "-avz", remote_file, str(local_file)],
-                                check=False,
-                                capture_output=True,
-                                timeout=self.timeouts["fetch_single_log"]
-                            )
-                        except Exception as e:
-                            print(f"    ⚠ Failed to fetch {log_file}: {e}")
-                    print(f"    ✓ {len(log_files)} log file(s) synced")
-                else:
-                    print(f"    ⚠ No log files found or error querying")
-            
-            # 3. Fetch last timestep directory if requested
+                self._fetch_logs(case_local, case_remote)
+
             if fetch_last_timestep:
-                print(f"  → Fetching last timestep…")
-                timesteps = self.get_result_timesteps(case_remote)
-                
-                if timesteps:
-                    last_ts = timesteps[-1]
-                    print(f"    Last timestep found: {last_ts}")
-                    
-                    try:
-                        cmd = [
-                            "rsync",
-                            "-avz",
-                            f"{self.cluster_host}:{case_remote}/{last_ts}/",
-                            str(case_local / str(last_ts)) + "/"
-                        ]
-                        subprocess.run(
-                            cmd,
-                            check=True,
-                            capture_output=False,
-                            timeout=self.timeouts["fetch_last_timestep"],
-                        )
-                        print(f"    ✓ Timestep {last_ts} synced")
-                        
-                        # Update status to track that results were fetched
-                        self.update_status(case_local, {"results_fetched": True, "last_fetched_timestep": last_ts})
-                    except Exception as e:
-                        print(f"    ✗ Failed to fetch timestep {last_ts}: {e}")
-                        return False
-                else:
-                    print(f"    ⚠ No timestep directories found on remote")
-            
+                if not self._fetch_last_timestep(case_local, case_remote):
+                    return False
+
+            if extra_files:
+                self._fetch_extra_files(case_local, case_remote, extra_files)
+
             print(f"[FETCH OK] {case_name}")
             return True
 
@@ -667,26 +724,35 @@ class OpenFOAMCaseGenerator:
             print(f"[FETCH FAILED] {case_name}: {e}")
             return False
 
-    def fetch_multiple_results(self, case_paths, n_workers=None, **fetch_kwargs):
-        """Fetch results from multiple cases in sequence (slower but more reliable)"""
-        if n_workers is None:
-            n_workers = self.parallel_defaults["fetch_workers"]
+    def fetch_multiple_results(self, case_paths, **fetch_kwargs):
+        """Fetch results from multiple cases sequentially.
 
+        Note: fetching is intentionally sequential rather than parallel because
+        concurrent SSH/rsync connections to the same HPC cluster are unreliable.
+
+        Args:
+            case_paths (list[Path | str]): Local case directories whose results should be fetched.
+            **fetch_kwargs: Keyword arguments forwarded to :meth:`fetch_case_results`
+                (e.g. ``fetch_last_timestep``, ``fetch_postprocessing``, ``fetch_logs``).
+
+        Returns:
+            list[bool]: A list of per-case success flags in the same order as *case_paths*.
+        """
         print(f"\nFetching results from {len(case_paths)} case(s)…\n")
-        
+
         results = []
         for i, case_path in enumerate(case_paths, 1):
-            print(f"[{i}/{len(case_paths)}] Processing {Path(case_path).name}")
+            print(f"[{i}/{len(case_paths)}] Processing {self._as_path(case_path).name}")
             success = self.fetch_case_results(case_path, **fetch_kwargs)
             results.append(success)
             print()
-        
+
         succeeded = sum(results)
         failed = len(results) - succeeded
         print(f"{'='*60}")
         print(f"Result fetching complete: {succeeded} succeeded, {failed} failed")
         print(f"{'='*60}\n")
-        
+
         return results
 
     # --------------------------------------------------
@@ -698,8 +764,8 @@ class OpenFOAMCaseGenerator:
         print(f"Found {len(cases)} cases")
 
         for case_num, case_info in enumerate(cases, start=1):
-            case_info = {**case_info, 'case_num': case_num}
-            params = {k: v for k, v in case_info.items() if k not in ('case_dir', 'metadata')}
+            enriched = {**case_info, 'case_num': case_num}
+            params = {k: v for k, v in enriched.items() if k not in ('case_dir', 'metadata')}
             print(f"Processing [{case_num}/{len(cases)}] {params}")
-            output = self.setup_case(case_info)
+            output = self.setup_case(enriched)
             print(f"  → {output}")

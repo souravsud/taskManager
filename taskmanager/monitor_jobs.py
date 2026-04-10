@@ -3,6 +3,7 @@ import sys
 import time
 
 from .config_utils import load_runtime_config, required_path
+from .constants import JobStatus
 from .taskmanager import OpenFOAMCaseGenerator
 
 
@@ -18,8 +19,8 @@ def build_parser():
     return parser
 
 
-if __name__ == "__main__":
-    args = build_parser().parse_args()
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     config, _ = load_runtime_config(args.config_path)
 
     monitor_settings = config.get("monitor_jobs", {})
@@ -61,11 +62,11 @@ if __name__ == "__main__":
 
                     print(f"{case_name}: Job {job_id} -> {job_status}")
 
-                    if job_status in ["PENDING", "RUNNING"]:
+                    if job_status in (JobStatus.PENDING, JobStatus.RUNNING):
                         active_jobs.append((case_name, job_id, job_status))
-                    elif job_status in ["COMPLETED"]:
+                    elif job_status == JobStatus.COMPLETED:
                         completed_jobs.append((case_name, job_id))
-                    elif job_status in ["FAILED", "CANCELLED", "TIMEOUT"]:
+                    elif job_status in (JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.TIMEOUT):
                         failed_jobs.append((case_name, job_id, job_status))
 
                 # Summary
@@ -91,3 +92,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\nMonitoring stopped by user (Ctrl+C).")
         sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

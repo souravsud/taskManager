@@ -1,6 +1,8 @@
 from copy import deepcopy
 from pathlib import Path
 
+import yaml
+
 
 DEFAULT_CONFIG = {
     "cluster": {
@@ -70,14 +72,6 @@ def deep_update(base, updates):
 
 
 def load_yaml_config(config_path):
-    try:
-        import yaml
-    except ImportError as exc:
-        raise ImportError(
-            "PyYAML is required to read task manager config files. "
-            "Install it with: pip install pyyaml"
-        ) from exc
-
     with open(config_path, "r") as f:
         loaded = yaml.safe_load(f) or {}
 
